@@ -1,0 +1,18 @@
+﻿# dependencies
+node_modules/
+frontend/node_modules/
+
+# nextjs
+.next/
+frontend/.next/
+
+# env files
+.env
+.env.local
+
+# python
+venv/
+__pycache__/
+
+# misc
+.DS_Store

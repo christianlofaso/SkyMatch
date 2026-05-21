@@ -1,0 +1,228 @@
+{
+  "profile": {
+    "full_name": "Marcus Chen",
+    "headline": "CS + Finance @ UMich | Software Engineering Intern @ Citadel | Seeking 2025 SWE Roles",
+    "location": "Ann Arbor, Michigan",
+    "school": "University of Michigan",
+    "graduation_year": 2026,
+    "major": "Computer Science",
+    "fraternity_or_orgs": ["Sigma Chi", "Michigan Data Science Team", "Wolverine Venture Fund"],
+    "past_companies": ["Citadel", "Duo Security"],
+    "current_company": null,
+    "technical_skills": ["Python", "TypeScript", "React", "SQL", "C++", "PyTorch"],
+    "field_of_interest": "Software Engineering",
+    "key_values": ["quantitative finance", "developer tooling", "high-performance systems", "early-stage startups"]
+  },
+  "connections": [
+    {
+      "name": "Priya Anand",
+      "title": "Software Engineer",
+      "company": "Jane Street",
+      "linkedin_url": "https://linkedin.com/in/priya-anand-js",
+      "commonality_type": "school",
+      "commonality_detail": "University of Michigan, CS Class of 2023",
+      "why_relevant": "Priya went SWE at Jane Street straight out of UMich CS — she navigated the exact quant-finance crossover you're targeting."
+    },
+    {
+      "name": "Derek Walsh",
+      "title": "Quantitative Researcher Intern",
+      "company": "Two Sigma",
+      "linkedin_url": "https://linkedin.com/in/derek-walsh-twosigma",
+      "commonality_type": "fraternity",
+      "commonality_detail": "Sigma Chi, University of Michigan, Illinois Eta chapter",
+      "why_relevant": "Sigma Chi brother at UMich who landed a quant research role — direct overlap in background and interests."
+    },
+    {
+      "name": "Aisha Thompson",
+      "title": "Product Manager",
+      "company": "Figma",
+      "linkedin_url": "https://linkedin.com/in/aisha-thompson-figma",
+      "commonality_type": "past_company",
+      "commonality_detail": "Both interned at Citadel, Summer 2024",
+      "why_relevant": "Pivoted from Citadel SWE to PM at Figma — useful perspective if you're weighing SWE vs PM trajectories."
+    },
+    {
+      "name": "James Li",
+      "title": "Senior Software Engineer",
+      "company": "Palantir Technologies",
+      "linkedin_url": "https://linkedin.com/in/james-li-palantir",
+      "commonality_type": "major",
+      "commonality_detail": "Computer Science, University of Michigan, Class of 2022",
+      "why_relevant": "UMich CS alum at Palantir — strong intro for a systems-focused SWE role there."
+    },
+    {
+      "name": "Sofia Martinez",
+      "title": "Venture Analyst",
+      "company": "Andreessen Horowitz",
+      "linkedin_url": "https://linkedin.com/in/sofia-martinez-a16z",
+      "commonality_type": "school",
+      "commonality_detail": "University of Michigan, Wolverine Venture Fund co-lead, Class of 2024",
+      "why_relevant": "Also ran Wolverine Venture Fund before a16z — natural warm intro for venture or early-stage startup roles."
+    },
+    {
+      "name": "Ryan Park",
+      "title": "Software Engineer",
+      "company": "Stripe",
+      "linkedin_url": "https://linkedin.com/in/ryan-park-stripe",
+      "commonality_type": "field",
+      "commonality_detail": "Software Engineering, fintech infrastructure focus",
+      "why_relevant": "Fintech SWE path to Stripe — directly relevant if you're interested in payments infrastructure."
+    },
+    {
+      "name": "Chloe Nguyen",
+      "title": "Machine Learning Engineer",
+      "company": "OpenAI",
+      "linkedin_url": "https://linkedin.com/in/chloe-nguyen-openai",
+      "commonality_type": "school",
+      "commonality_detail": "University of Michigan, Michigan Data Science Team, Class of 2023",
+      "why_relevant": "Michigan Data Science Team alum who went ML at OpenAI — strong overlap in technical community and interests."
+    },
+    {
+      "name": "Brandon Mitchell",
+      "title": "Software Engineer",
+      "company": "Cisco (Duo Security)",
+      "linkedin_url": "https://linkedin.com/in/brandon-mitchell-duo",
+      "commonality_type": "past_company",
+      "commonality_detail": "Both worked at Duo Security, Ann Arbor office",
+      "why_relevant": "Current Duo engineer — can speak to team growth, culture, and referral pipeline for return offers."
+    },
+    {
+      "name": "Lily Zhang",
+      "title": "Quantitative Trader",
+      "company": "Optiver",
+      "linkedin_url": "https://linkedin.com/in/lily-zhang-optiver",
+      "commonality_type": "major",
+      "commonality_detail": "Computer Science, University of Michigan, quant finance track",
+      "why_relevant": "CS major who went quant trading at Optiver — direct parallel to your CS + Finance background."
+    },
+    {
+      "name": "Kevin Osei",
+      "title": "Founding Engineer",
+      "company": "Fern (YC W23)",
+      "linkedin_url": "https://linkedin.com/in/kevin-osei-fern",
+      "commonality_type": "field",
+      "commonality_detail": "Developer tooling, early-stage startup, SWE background",
+      "why_relevant": "Founding engineer at a YC dev-tooling startup — aligns with your interest in developer tooling and early-stage work."
+    }
+  ],
+  "internships": {
+    "local": [
+      {
+        "title": "Software Engineering Intern",
+        "company": "Censys",
+        "location": "Ann Arbor, MI",
+        "company_description": "Cybersecurity intelligence platform for attack surface management, backed by $75M Series B.",
+        "fit_explanation": "Ann Arbor-based SWE role with a Python-heavy stack — your Python and SQL skills are directly applicable. Censys has a strong UMich recruiting pipeline and above-average intern conversion rate.",
+        "application_url": "https://jobs.lever.co/censys",
+        "bucket": "local",
+        "reach_gap": null
+      },
+      {
+        "title": "Software Engineering Intern",
+        "company": "StockX",
+        "location": "Detroit, MI",
+        "company_description": "Marketplace for sneakers, apparel, and collectibles valued at $3.8B.",
+        "fit_explanation": "30 minutes from Ann Arbor. Consumer marketplace SWE using TypeScript and React — your exact stack — that would let you ship user-facing product at scale.",
+        "application_url": "https://stockx.com/about/careers",
+        "bucket": "local",
+        "reach_gap": null
+      },
+      {
+        "title": "Data Engineering Intern",
+        "company": "Llamasoft (Blue Yonder)",
+        "location": "Ann Arbor, MI",
+        "company_description": "Supply chain optimization software used by Fortune 500 companies globally.",
+        "fit_explanation": "On-campus Ann Arbor employer with SQL and Python data pipelines — maps to your existing technical skills without requiring a relocation.",
+        "application_url": null,
+        "bucket": "local",
+        "reach_gap": null
+      }
+    ],
+    "big_tech": [
+      {
+        "title": "Software Engineering Intern",
+        "company": "Google",
+        "location": "Mountain View, CA",
+        "company_description": "World's largest search and cloud infrastructure company.",
+        "fit_explanation": "Your Python, C++, and PyTorch experience maps well to Google's SWE intern roles across infrastructure and ML teams. UMich is a strong Google feeder school with dedicated recruiting events.",
+        "application_url": "https://careers.google.com/students/",
+        "bucket": "big_tech",
+        "reach_gap": null
+      },
+      {
+        "title": "Software Engineering Intern",
+        "company": "Meta",
+        "location": "Menlo Park, CA",
+        "company_description": "Social media and AR/VR platform with one of the largest intern programs in tech.",
+        "fit_explanation": "UMich CS is a strong Meta feeder school. Your React and TypeScript skills are directly applicable to their product engineering teams, and your Citadel internship signals strong execution under pressure.",
+        "application_url": "https://www.metacareers.com/careerprograms/students/internships",
+        "bucket": "big_tech",
+        "reach_gap": null
+      },
+      {
+        "title": "Software Engineering Intern — Payments",
+        "company": "Stripe",
+        "location": "San Francisco, CA",
+        "company_description": "Global payments infrastructure company processing hundreds of billions annually.",
+        "fit_explanation": "Your Citadel fintech background combined with TypeScript and Python maps well to Stripe's payments infrastructure teams. Stripe actively recruits candidates with both finance and engineering depth.",
+        "application_url": "https://stripe.com/jobs/university",
+        "bucket": "big_tech",
+        "reach_gap": null
+      }
+    ],
+    "startup": [
+      {
+        "title": "Software Engineering Intern",
+        "company": "Ramp",
+        "location": "New York, NY",
+        "company_description": "Corporate card and spend management platform, $8.1B valuation and fastest-growing fintech SaaS.",
+        "fit_explanation": "Ramp's TypeScript-heavy stack maps directly to your skills, and your Citadel experience gives you fintech credibility that stands out in their applicant pool. Strong conversion from intern to full-time.",
+        "application_url": "https://ramp.com/careers",
+        "bucket": "startup",
+        "reach_gap": null
+      },
+      {
+        "title": "Software Engineering Intern",
+        "company": "Anduril Industries",
+        "location": "Costa Mesa, CA",
+        "company_description": "Defense tech company building autonomous systems, Series E at $8.5B valuation.",
+        "fit_explanation": "High-performance C++ and Python at scale in a mission-critical domain — directly maps to your systems background. Anduril recruits heavily from top CS programs including UMich.",
+        "application_url": "https://www.anduril.com/open-roles/",
+        "bucket": "startup",
+        "reach_gap": null
+      },
+      {
+        "title": "Quantitative Developer Intern",
+        "company": "Freebird (YC S22)",
+        "location": "San Francisco, CA",
+        "company_description": "Travel rebooking platform using ML for real-time flight optimization, YC-backed Series A.",
+        "fit_explanation": "Bridges your Citadel quant work with startup pace — Python and ML focus in a consumer fintech context. Small team means real ownership and direct mentorship from founders.",
+        "application_url": null,
+        "bucket": "startup",
+        "reach_gap": null
+      }
+    ],
+    "reach": [
+      {
+        "title": "Software Engineering Intern",
+        "company": "Citadel Securities",
+        "location": "Chicago, IL",
+        "company_description": "Leading global market maker and one of the most selective SWE intern programs in finance.",
+        "fit_explanation": "Your Citadel internship is a direct credential — Citadel Securities actively converts Citadel LLC interns. Your Python, C++, and quant background is the exact profile they target.",
+        "application_url": "https://www.citadelsecurities.com/careers/students-and-graduates/",
+        "bucket": "reach",
+        "reach_gap": "Citadel Securities is extremely competitive even with Citadel LLC experience. To strengthen your candidacy: push your LeetCode hard pass rate above 90% and ship one open-source quant or systems project you can discuss in depth during their technical screen."
+      },
+      {
+        "title": "Software Engineering Intern",
+        "company": "Hudson River Trading",
+        "location": "New York, NY",
+        "company_description": "Elite systematic trading firm known for low-latency systems and exceptional SWE comp.",
+        "fit_explanation": "Your C++ background and quant finance interest make you a credible candidate — HRT values both. Your Citadel experience signals you can handle fast-moving, high-stakes engineering environments.",
+        "application_url": "https://www.hudsonrivertrading.com/careers/",
+        "bucket": "reach",
+        "reach_gap": "HRT cares deeply about systems programming depth. Close the gap by building one low-latency or OS-level project in C++ — something that demonstrates you understand memory layout, cache behavior, or network performance."
+      }
+    ]
+  }
+}
