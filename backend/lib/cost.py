@@ -20,6 +20,7 @@ import contextvars
 from contextlib import contextmanager
 
 from config.models import MODEL_FULL, MODEL_MID, MODEL_QUICK
+from cache import insert_cost_event
 
 # Approximate USD per 1M tokens: (input, output). ESTIMATES — see module docstring.
 _PRICE_PER_MTOK = {
@@ -31,6 +32,15 @@ _CACHE_READ_MULT = 0.1    # cache hits ~10% of input price
 _CACHE_WRITE_MULT = 1.25  # cache writes ~125% of input price
 
 _rows: contextvars.ContextVar = contextvars.ContextVar("cost_rows", default=None)
+# Name of the active cost_session (the "search"), tagged onto persisted cost_events rows.
+_session_name: contextvars.ContextVar = contextvars.ContextVar("cost_session_name", default=None)
+
+# Representative (model, input_tokens, output_tokens) per cache-hit label — used to
+# estimate the USD a full-call cache avoidance saved. Approximate, like all USD here.
+_HIT_ESTIMATE = {
+    "annotate":       (MODEL_MID, 800, 120),
+    "analysis:quick": (MODEL_QUICK, 4000, 300),
+}
 
 
 def _estimate_usd(model: str, in_tok: int, out_tok: int, cache_read: int, cache_write: int) -> float:
@@ -55,10 +65,35 @@ def record_usage(label: str, model: str, usage) -> None:
     rows = _rows.get()
     if rows is not None:
         rows.append((label, model, in_tok, out_tok, cache_read, cache_write, usd))
+    # Persist for GET /cost/summary. Guarded: cost accounting must never break a Claude call.
+    try:
+        insert_cost_event(
+            kind="call", session=_session_name.get(), label=label, model=model,
+            input_tokens=in_tok, output_tokens=out_tok,
+            cache_read_tokens=cache_read, cache_write_tokens=cache_write, usd=usd,
+        )
+    except Exception as e:
+        print(f"[cost] persist failed: {e}")
     print(
         f"[cost] {label} ({model}): in={in_tok} out={out_tok} "
         f"cache_r={cache_read} cache_w={cache_write} ~${usd:.4f}"
     )
+
+
+def record_cache_hit(label: str, model: str | None = None) -> None:
+    """Record a full-call cache avoidance (e.g. annotate / score served from SQLite): zero
+    actual spend, est_saved_usd = what the call WOULD have cost at representative token counts.
+    Tagged with the active cost_session so /cost/summary can sum savings per search."""
+    est_model, in_tok, out_tok = _HIT_ESTIMATE.get(label, (model or MODEL_MID, 0, 0))
+    saved = _estimate_usd(est_model, in_tok, out_tok, 0, 0)
+    try:
+        insert_cost_event(
+            kind="hit", session=_session_name.get(), label=label,
+            model=est_model, est_saved_usd=saved,
+        )
+    except Exception as e:
+        print(f"[cost] hit-persist failed: {e}")
+    print(f"[cost] hit {label} (~${saved:.4f} saved)")
 
 
 @contextmanager
@@ -71,10 +106,12 @@ def cost_session(name: str):
     this block so they inherit the binding."""
     rows: list[tuple] = []
     token = _rows.set(rows)
+    name_token = _session_name.set(name)
     try:
         yield
     finally:
         _rows.reset(token)
+        _session_name.reset(name_token)
         total_usd = sum(r[6] for r in rows)
         total_in  = sum(r[2] for r in rows)
         total_out = sum(r[3] for r in rows)

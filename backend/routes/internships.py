@@ -8,13 +8,15 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from cache import (
-    ONE_DAY, add_rotation_metro, get_listing_by_url, get_listings,
-    get_rotation_metros, upsert_listing,
+    ONE_DAY, add_rotation_metro, annotate_cache_key, get_annotate_cache,
+    get_listing_by_url, get_listings, get_rotation_metros, set_annotate_cache,
+    upsert_listing,
 )
 from config.models import MODEL_MID
 from config.niches import NATIONAL_NICHE_KEY, REACH_NICHE_KEY
 from lib import embeddings
 from lib.anthropic_client import client as ai, sonnet_sem
+from lib.cost import cost_session, record_cache_hit, record_usage
 from lib.jsonparse import parse_json_with_context, strip_fences
 from lib.listing_parser import company_from_url
 from lib.precompute import parse_and_embed_rows
@@ -183,6 +185,7 @@ def _annotate_fit_sync(
                 ),
             }],
         )
+        record_usage(f"annotate-fit:{bucket}", MODEL_MID, msg.usage)
         raw = strip_fences(msg.content[0].text)
         if not raw.strip() or raw.strip().lower() == "null":
             return None
@@ -552,11 +555,12 @@ async def internships_search_route(profile: ProfileAnalysis):
 # personalized "why you fit" text one role at a time (streamed ndjson, mirrors /analyze/batch).
 
 async def _annotate_one(
-    i: int, profile: ProfileAnalysis, url: str, bucket: str, city: str | None,
+    i: int, profile: ProfileAnalysis, profile_json: str, url: str, bucket: str, city: str | None,
 ) -> AnnotateEnvelope:
-    """Look up one served listing by URL, run the slim fit-only Sonnet call, and return an
-    envelope. A missing row → error; a model decline/error → ok with empty fit (card just
-    keeps its blank 'why you fit' rather than spinning forever)."""
+    """Return one served listing's per-user fit envelope. Served from annotate_cache when present
+    (no sonnet_sem, no Claude — the near-free path); otherwise runs the slim fit-only Sonnet call
+    and caches the result. A missing row → error; a model decline/error → ok with empty fit (card
+    just keeps its blank 'why you fit' rather than spinning forever)."""
     try:
         row = get_listing_by_url(url)
         if not row:
@@ -564,11 +568,23 @@ async def _annotate_one(
                 index=i, status="error",
                 error=AnnotateError(message="listing not found", code="NOT_FOUND"),
             )
+        # Key on the listing's content_hash (a re-parse → new hash → fresh reasoning), else url.
+        key = annotate_cache_key(profile_json, bucket, row.get("content_hash") or url)
+        cached = get_annotate_cache(key)
+        if cached is not None:
+            record_cache_hit("annotate", MODEL_MID)
+            return AnnotateEnvelope(
+                index=i, status="ok",
+                fit_explanation=cached.get("fit_explanation") or "",
+                reach_gap=cached.get("reach_gap"),
+            )
         listing = _to_listings([row])[0]
         fields = _fit_fields(listing)
         # sonnet_sem: process-wide Sonnet concurrency cap (lib/anthropic_client.py).
         async with sonnet_sem:
             out = await asyncio.to_thread(_annotate_fit_sync, profile, fields, bucket, city)
+        if out:  # cache only a real, non-empty result — declines/errors re-attempt next time
+            set_annotate_cache(key, out)
         return AnnotateEnvelope(
             index=i, status="ok",
             fit_explanation=(out or {}).get("fit_explanation") or "",
@@ -588,25 +604,30 @@ async def internships_annotate_route(req: AnnotateRequest):
     served (url, bucket); we write its per-user fit_explanation (+reach_gap for reach).
     In-flight Sonnet calls are bounded by the process-wide sonnet_sem."""
     city = _parse_metro(req.profile.location)
+    profile_json = req.profile.model_dump_json()  # serialize once; reused for every job's cache key
     queue: asyncio.Queue[AnnotateEnvelope] = asyncio.Queue()
 
     async def _one(i: int, job) -> None:
         bucket_city = city if job.bucket == "local" else None
-        env = await _annotate_one(i, req.profile, job.url, job.bucket, bucket_city)
+        env = await _annotate_one(i, req.profile, profile_json, job.url, job.bucket, bucket_city)
         await queue.put(env)
 
     async def _gen():
-        tasks = [asyncio.create_task(_one(i, j)) for i, j in enumerate(req.jobs)]
-        pending = len(tasks)
-        try:
-            while pending:
-                env = await queue.get()
-                yield env.model_dump_json(exclude_none=True) + "\n"
-                pending -= 1
-        finally:
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
+        # cost_session must wrap the whole drain loop so each task inherits the contextvar
+        # binding and its record_usage()/record_cache_hit() calls aggregate + persist under
+        # this search's name (mirrors /analyze/batch).
+        with cost_session(f"/internships/annotate ({len(req.jobs)} roles)"):
+            tasks = [asyncio.create_task(_one(i, j)) for i, j in enumerate(req.jobs)]
+            pending = len(tasks)
+            try:
+                while pending:
+                    env = await queue.get()
+                    yield env.model_dump_json(exclude_none=True) + "\n"
+                    pending -= 1
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
 
     return StreamingResponse(
         _gen(),

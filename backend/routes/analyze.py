@@ -24,7 +24,7 @@ from cache import (
 )
 from config.models import MODEL_FULL, MODEL_MID, MODEL_QUICK
 from lib.anthropic_client import client as ai, sonnet_sem
-from lib.cost import cost_session, record_usage
+from lib.cost import cost_session, record_cache_hit, record_usage
 from lib.firecrawl import (
     API_KEY as _FIRECRAWL_API_KEY,
     PROXY_MODE as _FIRECRAWL_PROXY_MODE,
@@ -1308,6 +1308,7 @@ async def _quick_for_one(
     cached = _get_user_analysis_cache(cache_key)
     if cached:
         print(f"[batch] user_cache=hit key={cache_key[:24]}…")
+        record_cache_hit("analysis:quick", MODEL_QUICK)  # repeat-search score served from SQLite
         return QuickAnalysisResponse(**cached)
 
     async with sem:

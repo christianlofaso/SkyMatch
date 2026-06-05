@@ -88,6 +88,34 @@ def init_db() -> None:
                 alive      INTEGER NOT NULL,
                 checked_at INTEGER NOT NULL
             );
+            -- Per-(profile, role) "why you fit" reasoning from /internships/annotate.
+            -- cache_key = profile_hash : bucket : (listing content_hash, else url) — see
+            -- annotate_cache_key. 30-day TTL via _get. The served feed stays zero-LLM; this
+            -- just spares the deferred Sonnet call on repeat (cross-device / same-profile) views.
+            CREATE TABLE IF NOT EXISTS annotate_cache (
+                cache_key  TEXT PRIMARY KEY,
+                data       TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            -- Append-only ledger of Claude spend + cache savings (written by lib/cost.py).
+            -- kind='call' rows carry real tokens/usd; kind='hit' rows carry est_saved_usd for
+            -- a full-call cache avoidance (usd=0). Read by GET /cost/summary.
+            CREATE TABLE IF NOT EXISTS cost_events (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at         INTEGER NOT NULL,
+                kind               TEXT NOT NULL,        -- 'call' | 'hit'
+                session            TEXT,
+                label              TEXT,
+                model              TEXT,
+                input_tokens       INTEGER NOT NULL DEFAULT 0,
+                output_tokens      INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                usd                REAL NOT NULL DEFAULT 0,
+                est_saved_usd      REAL NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_cost_events_created
+                ON cost_events(created_at);
             -- Pre-ingested job listings, populated by the background worker
             -- (worker/ingest.py). Unlike every other table here (one JSON blob per
             -- key), this is a QUERYABLE COLLECTION the serving layer filters by
@@ -201,6 +229,13 @@ def profile_hash(profile_json: str) -> str:
 
 def analysis_cache_key(mode: str, profile_json: str, job_text: str) -> str:
     return f"{mode}:{profile_hash(profile_json)}:{job_text_hash(job_text)}"
+
+
+def annotate_cache_key(profile_json: str, bucket: str, sig: str) -> str:
+    """Key for the per-(profile, role) fit-reasoning cache. `sig` is the listing's
+    content_hash when parsed (so a re-parse invalidates), else its url. Location/city is
+    already folded into profile_hash, so bucket is the only extra dimension needed."""
+    return f"{profile_hash(profile_json)}:{bucket}:{sig}"
 
 
 def _get(table: str, key_col: str, key_val: str, ttl: int | None) -> dict | list | None:
@@ -337,6 +372,47 @@ def set_user_analysis_cache(cache_key: str, mode: str, data: dict) -> None:
             "(cache_key, mode, data, created_at) VALUES (?, ?, ?, ?)",
             (cache_key, mode, json.dumps(data), int(time.time())),
         )
+
+
+# --- Annotate (fit reasoning) cache (per-(profile, role), 30-day TTL) -------
+# Stores {"fit_explanation", "reach_gap"} so the deferred /internships/annotate Sonnet
+# call is skipped on repeat views (different browser/device, or another user with the
+# same profile). Keyed by annotate_cache_key (profile_hash : bucket : content_hash|url).
+
+def get_annotate_cache(cache_key: str) -> dict | None:
+    return _get("annotate_cache", "cache_key", cache_key, ttl=THIRTY_DAYS)
+
+
+def set_annotate_cache(cache_key: str, data: dict) -> None:
+    _set("annotate_cache", "cache_key", cache_key, data)
+
+
+# --- Cost events ledger (append-only spend + savings) ----------------------
+# Written by lib/cost.py; read by GET /cost/summary. 'call' rows = real spend;
+# 'hit' rows = a full-call cache avoidance (usd=0, est_saved_usd>0).
+
+def insert_cost_event(
+    *, kind: str, session: str | None = None, label: str | None = None,
+    model: str | None = None, input_tokens: int = 0, output_tokens: int = 0,
+    cache_read_tokens: int = 0, cache_write_tokens: int = 0,
+    usd: float = 0.0, est_saved_usd: float = 0.0,
+) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO cost_events (created_at, kind, session, label, model, "
+            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, usd, est_saved_usd) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (int(time.time()), kind, session, label, model, input_tokens, output_tokens,
+             cache_read_tokens, cache_write_tokens, usd, est_saved_usd),
+        )
+
+
+def query_cost_events(since: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM cost_events WHERE created_at >= ? ORDER BY created_at", (since,)
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --- URL liveness cache (global, 7-day TTL) --------------------------------

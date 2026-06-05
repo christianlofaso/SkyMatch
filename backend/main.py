@@ -11,6 +11,7 @@ from routes.connections import router as connections_router
 from routes.internships import router as internships_router
 from routes.resume import router as resume_router
 from routes.analyze import router as analyze_router
+from routes.cost import router as cost_router
 
 app = FastAPI(title="Pathfinder API")
 
@@ -33,6 +34,7 @@ app.include_router(connections_router)
 app.include_router(internships_router)
 app.include_router(resume_router)
 app.include_router(analyze_router)
+app.include_router(cost_router)
 
 
 @app.get("/health")
