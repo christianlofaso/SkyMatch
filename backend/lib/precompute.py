@@ -22,7 +22,7 @@ from lib.listing_parser import (
 )
 from lib.timing import timed
 
-# Max in-flight Haiku listing-parse calls (Haiku is intentionally ungated by sonnet_sem).
+# Max in-flight Haiku listing-parse calls (Haiku is intentionally ungated by sonnet_slot()).
 WORKER_PARSE_CONCURRENCY = int(os.getenv("WORKER_PARSE_CONCURRENCY", "8"))
 
 
@@ -39,7 +39,7 @@ async def parse_and_embed_rows(rows: list[dict], *, firecrawl_company: bool = Tr
     if not rows:
         return {"parsed": 0, "embedded": 0, "haiku_failed": 0}
 
-    # 1. Haiku parse, bounded (Haiku is ungated by sonnet_sem). Blocking → to_thread.
+    # 1. Haiku parse, bounded (Haiku is ungated by sonnet_slot()). Blocking → to_thread.
     sem = asyncio.Semaphore(WORKER_PARSE_CONCURRENCY)
 
     async def _parse(row: dict) -> dict | None:

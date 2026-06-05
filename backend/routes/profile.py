@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from cache import get_profile_cache, set_profile_cache, text_cache_key
 from config.models import MODEL_MID
-from lib.anthropic_client import client as ai, sonnet_sem
+from lib.anthropic_client import client as ai, sonnet_slot
 from lib.cost import cost_session, record_usage
 from lib.jsonparse import parse_json_with_context
 from linkd import LinkdClient, extract_username
@@ -130,9 +130,10 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
     # event loop and serializes the asyncio.gather in resume.py (analyze_profile +
     # extract_rich_fields would run back-to-back instead of in parallel). MODEL_MID
     # (Sonnet): this is pure field extraction, not deep reasoning — Opus latency unjustified.
-    # sonnet_sem caps process-wide concurrent Sonnet calls (rate-limit governor — see
-    # lib/anthropic_client.py); acquire it in the async layer, around the thread dispatch.
-    async with sonnet_sem:
+    # sonnet_slot() caps global concurrent Sonnet calls (Redis-distributed rate-limit
+    # governor — see lib/anthropic_client.py); acquire it in the async layer, around the
+    # thread dispatch.
+    async with sonnet_slot():
         msg = await asyncio.to_thread(
             ai.messages.create,
             model=MODEL_MID,
@@ -174,8 +175,8 @@ async def extract_rich_fields(source_text: str) -> dict:
     """
     # Blocking call → worker thread (see analyze_profile). MODEL_MID (Sonnet): rich-field
     # extraction (skills/work/education/projects) is structured extraction, not reasoning.
-    # sonnet_sem: process-wide Sonnet concurrency cap (see lib/anthropic_client.py).
-    async with sonnet_sem:
+    # sonnet_slot(): global Sonnet concurrency cap (Redis-distributed — see lib/anthropic_client.py).
+    async with sonnet_slot():
         msg = await asyncio.to_thread(
             ai.messages.create,
             model=MODEL_MID,

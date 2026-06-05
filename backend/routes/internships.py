@@ -16,7 +16,7 @@ from cache import (
 from config.models import MODEL_MID
 from config.niches import NATIONAL_NICHE_KEY, REACH_NICHE_KEY
 from lib import embeddings
-from lib.anthropic_client import client as ai, sonnet_sem
+from lib.anthropic_client import client as ai, sonnet_slot
 from lib.cost import cost_session, record_cache_hit, record_usage
 from lib.jsonparse import parse_json_with_context, strip_fences
 from lib.listing_parser import company_from_url
@@ -31,9 +31,9 @@ from schemas import (
 from lib.ingest_core import _scrape_local_listings, _parse_metro, validate_job_url
 
 router = APIRouter()
-# The Anthropic client (shared, max_retries raised) AND the process-wide Sonnet concurrency
-# cap both live in lib/anthropic_client.py now. The per-role fan-out below grazes the org's
-# Sonnet input-tokens / requests-per-minute limits; sonnet_sem staggers the burst across 2-3
+# The Anthropic client (shared, max_retries raised) AND the global Sonnet concurrency
+# governor both live in lib/anthropic_client.py now. The per-role fan-out below grazes the org's
+# Sonnet input-tokens / requests-per-minute limits; sonnet_slot() staggers the burst across 2-3
 # minutes and the SDK's Retry-After backoff recovers any residual 429 instead of dropping a role.
 
 
@@ -172,7 +172,7 @@ def _annotate_fit_sync(
     """Slim fit-only Claude call for the DEFERRED annotate pass: given the listing's
     already-known display fields, write just the per-user fit_explanation (+reach_gap for
     reach). Returns {"fit_explanation", "reach_gap"} or None when the model declines / errors
-    (the card simply keeps its empty fit text). Called via asyncio.to_thread under sonnet_sem."""
+    (the card simply keeps its empty fit text). Called via asyncio.to_thread under sonnet_slot()."""
     try:
         msg = ai.messages.create(
             model=MODEL_MID,
@@ -585,7 +585,7 @@ async def _annotate_one(
     i: int, profile: ProfileAnalysis, profile_json: str, url: str, bucket: str, city: str | None,
 ) -> AnnotateEnvelope:
     """Return one served listing's per-user fit envelope. Served from annotate_cache when present
-    (no sonnet_sem, no Claude — the near-free path); otherwise runs the slim fit-only Sonnet call
+    (no sonnet_slot(), no Claude — the near-free path); otherwise runs the slim fit-only Sonnet call
     and caches the result. A missing row → error; a model decline/error → ok with empty fit (card
     just keeps its blank 'why you fit' rather than spinning forever)."""
     try:
@@ -607,8 +607,8 @@ async def _annotate_one(
             )
         listing = _to_listings([row])[0]
         fields = _fit_fields(listing)
-        # sonnet_sem: process-wide Sonnet concurrency cap (lib/anthropic_client.py).
-        async with sonnet_sem:
+        # sonnet_slot(): global Sonnet concurrency cap (Redis-distributed — lib/anthropic_client.py).
+        async with sonnet_slot():
             out = await asyncio.to_thread(_annotate_fit_sync, profile, fields, bucket, city)
         if out:  # cache only a real, non-empty result — declines/errors re-attempt next time
             await asyncio.to_thread(set_annotate_cache, key, out)
@@ -629,7 +629,7 @@ async def _annotate_one(
 async def internships_annotate_route(req: AnnotateRequest):
     """Streams ndjson: one AnnotateEnvelope per line, in completion order. Each job is a
     served (url, bucket); we write its per-user fit_explanation (+reach_gap for reach).
-    In-flight Sonnet calls are bounded by the process-wide sonnet_sem."""
+    In-flight Sonnet calls are bounded by the global sonnet_slot() governor."""
     city = _parse_metro(req.profile.location)
     profile_json = req.profile.model_dump_json()  # serialize once; reused for every job's cache key
     queue: asyncio.Queue[AnnotateEnvelope] = asyncio.Queue()

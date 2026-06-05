@@ -23,7 +23,7 @@ from cache import (
     set_user_analysis_cache,
 )
 from config.models import MODEL_FULL, MODEL_MID, MODEL_QUICK
-from lib.anthropic_client import client as ai, sonnet_sem
+from lib.anthropic_client import client as ai, sonnet_slot
 from lib.cost import cost_session, record_cache_hit, record_usage
 from lib.firecrawl import (
     API_KEY as _FIRECRAWL_API_KEY,
@@ -573,8 +573,8 @@ async def extract_requirements(job_text: str) -> tuple[JobSummary, list[_Require
         return summary, requirements
 
     print(f"[analyze] requirements_cache=miss job={jh[:8]}")
-    # sonnet_sem: process-wide Sonnet concurrency cap (see lib/anthropic_client.py).
-    async with sonnet_sem:
+    # sonnet_slot(): global Sonnet concurrency cap (Redis-distributed — see lib/anthropic_client.py).
+    async with sonnet_slot():
         summary, requirements = await asyncio.to_thread(_run_extraction, job_text)
     await asyncio.to_thread(set_requirements_cache, jh, {
         "job_summary": summary.model_dump(),
@@ -1138,8 +1138,8 @@ async def _analyze_impl(req: AnalyzeRequest):
 
     # ── Full branch (Step B + assembly) ───────────────────────────────────────
     try:
-        # sonnet_sem: process-wide Sonnet concurrency cap (see lib/anthropic_client.py).
-        async with sonnet_sem:
+        # sonnet_slot(): global Sonnet concurrency cap (Redis-distributed — see lib/anthropic_client.py).
+        async with sonnet_slot():
             evaluations, verdict_reasoning = await timed_call(
                 "analyze/match", asyncio.to_thread(_run_matching, req.profile, requirements)
             )
@@ -1371,7 +1371,7 @@ async def _analyze_stream_prelude(req: AnalyzeRequest):
 
     # ── Step B: matching ──────────────────────────────────────────────────────
     try:
-        async with sonnet_sem:  # process-wide Sonnet concurrency cap
+        async with sonnet_slot():  # global Sonnet concurrency cap (Redis-distributed)
             evaluations, verdict_reasoning = await timed_call(
                 "analyze/match", asyncio.to_thread(_run_matching, req.profile, requirements)
             )

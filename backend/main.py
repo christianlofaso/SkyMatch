@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from cache import init_db
+from lib import redis_client
 from lib.guard import cost_guard
 from routes.run import router as run_router
 from routes.profile import router as profile_router
@@ -31,6 +32,12 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     init_db()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    # Close the Redis pool (best-effort; no-op when Redis was never used).
+    await redis_client.aclose()
 
 
 @app.exception_handler(Exception)
