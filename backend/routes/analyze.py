@@ -177,6 +177,38 @@ class AnalysisResponse(BaseModel):
     project_suggestion: ProjectSuggestion | None = None
 
 
+# ── /analyze/stream envelopes (full-mode progressive streaming) ───────────────
+# Flat shape mirroring BatchEnvelope. `phase` is the discriminator the frontend switches
+# on; each phase carries only its own payload fields (the rest are null). Serialized with
+# plain model_dump_json() (NOT exclude_none): the nested data models (matches, verdict, …)
+# legitimately use null, and exclude_none would DROP those null keys — but the Zod data
+# schemas require them present, so it'd fail validation. Off-phase fields arrive as null;
+# the Zod wrapper marks them nullable+optional.
+# Mirror: frontend/src/types/pathfinder.ts AnalyzeStreamEnvelopeSchema.
+
+class AnalyzeStreamError(BaseModel):
+    message: str
+    status: int  # advisory: the HTTP status the JSON /analyze would have returned (422/500)
+
+
+class AnalyzeStreamEnvelope(BaseModel):
+    phase: Literal["verdict", "roadmap", "project", "done", "error"]
+    # verdict payload (phase == "verdict") — everything available right after matching+scoring
+    fit_score: int | None = None
+    category_scores: dict[str, int] | None = None
+    matches: list[MatchItem] | None = None
+    gaps: list[GapItem] | None = None
+    verdict: Verdict | None = None
+    job_summary: JobSummary | None = None
+    # roadmap payload (phase == "roadmap")
+    roadmap: Roadmap | None = None
+    roadmap_note: str | None = None
+    # project payload (phase == "project")
+    project_suggestion: ProjectSuggestion | None = None
+    # error payload (phase == "error")
+    error: AnalyzeStreamError | None = None
+
+
 # ── Quick-mode + batch models ────────────────────────────────────────────────
 
 class QuickJobSummary(BaseModel):
@@ -1278,6 +1310,239 @@ async def _generate_phase3(
             print(f"[analyze] project_suggestion failed: {e}")
 
     return roadmap, roadmap_note, project
+
+
+# ── /analyze/stream (full-mode true streaming) ────────────────────────────────
+# Additive sibling of the JSON /analyze: same pipeline, but the verdict ships as
+# soon as matching completes and Phase 3 (roadmap, the ~80% latency driver) streams
+# in as each piece finishes. The JSON /analyze is untouched.
+
+async def _analyze_stream_prelude(req: AnalyzeRequest):
+    """Run the *can-fail* prefix of the full pipeline — resolve → user-cache →
+    extract → match → score — and raise HTTPException (422/500) HERE, before any
+    StreamingResponse body is constructed, so the JSON endpoint's friendly status
+    codes are preserved (a StreamingResponse locks status at 200 the moment it
+    starts). Returns one of:
+      ("cache_hit", AnalysisResponse)                       — emit all phases from cache
+      ("computed", verdict_payload, cache_key, include)     — stream Phase 3 live
+    The verdict_payload keys match AnalyzeStreamEnvelope's verdict fields exactly.
+    Mirrors _analyze_impl's full-branch prefix (resolve/cache/extract/match/score)."""
+    job_text, fetch_result, job_id = await _resolve_job(req.profile, req.job_url, req.job_text)
+    print(f"[analyze/stream] job_id={job_id[:80]}")
+
+    profile_json = req.profile.model_dump_json()
+    cache_key = analysis_cache_key("full", profile_json, job_id)
+    cached = _get_user_analysis_cache(cache_key)
+    if cached:
+        print(f"[analyze/stream] user_cache=hit key={cache_key[:24]}…")
+        # Self-heal stale headline from the quick cache (same as _analyze_impl).
+        quick_key = analysis_cache_key("quick", profile_json, job_id)
+        quick_cached = _get_user_analysis_cache(quick_key)
+        if quick_cached:
+            cur_fit = cached.get("fit_score")
+            cur_call = (cached.get("verdict") or {}).get("call")
+            new_fit = int(quick_cached["fit_score"])
+            new_call = quick_cached["verdict"]["call"]
+            if cur_fit != new_fit or cur_call != new_call:
+                cached["fit_score"] = new_fit
+                cached["verdict"]["call"] = new_call
+                set_user_analysis_cache(cache_key, "full", cached)
+        cached = await _phase3_backfill_cached_row(cached, cache_key, req.profile, req.include)
+        return ("cache_hit", AnalysisResponse(**cached))
+    print(f"[analyze/stream] user_cache=miss key={cache_key[:24]}…")
+
+    # ── Step A: extraction ────────────────────────────────────────────────────
+    try:
+        job_summary, requirements = await timed_call("analyze/extract", extract_requirements(job_text))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Requirement extraction failed: {e}")
+
+    if not requirements:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Could not find job requirements in the page. "
+                "The site may require login to show the full listing. "
+                "Try the 'Paste JD' tab: open the job page, copy the full description, and paste it."
+            ),
+        )
+
+    # ── Step B: matching ──────────────────────────────────────────────────────
+    try:
+        async with sonnet_sem:  # process-wide Sonnet concurrency cap
+            evaluations, verdict_reasoning = await timed_call(
+                "analyze/match", asyncio.to_thread(_run_matching, req.profile, requirements)
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Evidence matching failed: {e}")
+
+    evals_by_req = {e.requirement: e for e in evaluations}
+    category_scores = _compute_scores(requirements, evals_by_req)
+    full_fit_score = _compute_fit_score(category_scores)
+    gaps = _classify_gaps(requirements, evals_by_req)
+    full_verdict_call = _compute_verdict_call(full_fit_score, gaps)
+
+    # Reconcile the headline (fit_score + verdict.call) from the quick cache if one
+    # exists, so the number the user saw on the results card doesn't shift here.
+    quick_key = analysis_cache_key("quick", profile_json, job_id)
+    quick_cached = _get_user_analysis_cache(quick_key)
+    if quick_cached:
+        fit_score = int(quick_cached["fit_score"])
+        verdict_call = quick_cached["verdict"]["call"]
+    else:
+        fit_score = full_fit_score
+        verdict_call = full_verdict_call
+
+    matches: list[MatchItem] = []
+    for req_item in requirements:
+        ev = _lookup_evaluation(req_item.requirement, evals_by_req)
+        if ev and ev.match_strength in ("strong", "partial"):
+            matches.append(MatchItem(
+                requirement=req_item.requirement,
+                type=req_item.type,
+                must_have=req_item.must_have,
+                match_strength=ev.match_strength,  # type: ignore[arg-type]
+                evidence_snippet=ev.evidence_snippet,
+                evidence_source=ev.evidence_source,
+            ))
+
+    full_verdict = Verdict(call=verdict_call, reasoning=verdict_reasoning)
+    print(f"[analyze/stream] step B: {len(matches)} matches, {len(gaps)} gaps, verdict={verdict_call}")
+
+    verdict_payload = {
+        "fit_score": fit_score,
+        "category_scores": category_scores,
+        "matches": matches,
+        "gaps": gaps,
+        "verdict": full_verdict,
+        "job_summary": job_summary,
+    }
+    return ("computed", verdict_payload, cache_key, req.include)
+
+
+async def _stream_phase3(
+    profile: UnifiedProfile,
+    job_summary: JobSummary,
+    matches: list[MatchItem],
+    gaps: list[GapItem],
+    verdict: Verdict,
+    include: IncludeFlags,
+):
+    """Async-generator twin of _generate_phase3: fires the same roadmap + project
+    tasks concurrently but yields an AnalyzeStreamEnvelope as EACH completes
+    (completion order), so whichever finishes first reaches the client first.
+    Same no-gaps roadmap_note + failure-swallow semantics as _generate_phase3."""
+    if include.roadmap and not gaps:
+        # No gaps → no roadmap call; emit the note immediately (mirrors _generate_phase3).
+        yield AnalyzeStreamEnvelope(phase="roadmap", roadmap_note=_ROADMAP_NOTE_NO_GAPS)
+
+    task_kind: dict[asyncio.Task, str] = {}
+    if include.roadmap and gaps:
+        task_kind[asyncio.create_task(
+            _run_roadmap(profile, job_summary, matches, gaps, verdict)
+        )] = "roadmap"
+    if include.project:
+        task_kind[asyncio.create_task(
+            _run_project_suggestion(profile, job_summary, matches, gaps, verdict)
+        )] = "project"
+
+    pending = set(task_kind.keys())
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for t in done:
+            kind = task_kind[t]
+            try:
+                result = t.result()
+            except Exception as e:
+                print(f"[analyze/stream] {kind} generation failed: {e}")
+                result = None
+            if kind == "roadmap":
+                yield AnalyzeStreamEnvelope(phase="roadmap", roadmap=result)
+            else:
+                yield AnalyzeStreamEnvelope(phase="project", project_suggestion=result)
+
+
+def _cached_stream_envelopes(full: AnalysisResponse) -> list[AnalyzeStreamEnvelope]:
+    """Replay a complete (cached) AnalysisResponse as the same phase sequence a
+    live run would emit, so the frontend's stream-assembly path is identical for
+    hits and misses."""
+    return [
+        AnalyzeStreamEnvelope(
+            phase="verdict",
+            fit_score=full.fit_score,
+            category_scores=full.category_scores,
+            matches=full.matches,
+            gaps=full.gaps,
+            verdict=full.verdict,
+            job_summary=full.job_summary,
+        ),
+        AnalyzeStreamEnvelope(phase="roadmap", roadmap=full.roadmap, roadmap_note=full.roadmap_note),
+        AnalyzeStreamEnvelope(phase="project", project_suggestion=full.project_suggestion),
+        AnalyzeStreamEnvelope(phase="done"),
+    ]
+
+
+@router.post("/analyze/stream")
+async def analyze_stream(req: AnalyzeRequest):
+    """Full-mode true streaming. The prelude (resolve/extract/match/score) runs
+    first and can still raise a proper 422/500; only the verdict-emit + Phase 3
+    (which can't fail the request) stream. Emits ndjson AnalyzeStreamEnvelopes:
+    verdict → roadmap/project (completion order) → done. The JSON /analyze is
+    unchanged. Two [cost] ledgers print by design (prelude + phase3)."""
+    # Prelude: opened in its own session so extract/match spend is recorded, and
+    # so its HTTPExceptions raise BEFORE the StreamingResponse is constructed.
+    with timing_session("/analyze/stream prelude"), cost_session("/analyze/stream prelude"):
+        prelude = await _analyze_stream_prelude(req)
+
+    async def _gen():
+        # cost_session wraps task creation so the Phase 3 tasks inherit the
+        # contextvar binding and their record_usage() calls aggregate (same as batch).
+        with timing_session("/analyze/stream phase3"), cost_session("/analyze/stream phase3"):
+            if prelude[0] == "cache_hit":
+                for env in _cached_stream_envelopes(prelude[1]):
+                    yield env.model_dump_json() + "\n"
+                return
+
+            _, payload, cache_key, include = prelude
+            yield AnalyzeStreamEnvelope(phase="verdict", **payload).model_dump_json() + "\n"
+
+            roadmap: Roadmap | None = None
+            roadmap_note: str | None = None
+            project: ProjectSuggestion | None = None
+            async for env in _stream_phase3(
+                req.profile, payload["job_summary"], payload["matches"],
+                payload["gaps"], payload["verdict"], include,
+            ):
+                if env.phase == "roadmap":
+                    roadmap, roadmap_note = env.roadmap, env.roadmap_note
+                elif env.phase == "project":
+                    project = env.project_suggestion
+                yield env.model_dump_json() + "\n"
+
+            # Assemble the full result and cache it so a re-open is an instant hit.
+            result = AnalysisResponse(
+                fit_score=payload["fit_score"],
+                category_scores=payload["category_scores"],
+                matches=payload["matches"],
+                gaps=payload["gaps"],
+                verdict=payload["verdict"],
+                job_summary=payload["job_summary"],
+                roadmap=roadmap,
+                roadmap_note=roadmap_note,
+                project_suggestion=project,
+            )
+            set_user_analysis_cache(cache_key, "full", result.model_dump())
+            yield AnalyzeStreamEnvelope(phase="done").model_dump_json() + "\n"
+
+    return StreamingResponse(
+        _gen(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Batch endpoint ───────────────────────────────────────────────────────────

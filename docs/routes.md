@@ -44,6 +44,15 @@ Runs both Case 1 and Case 2 paths, then calls `_merge_profiles(linkedin_profile,
 
 `USE_MOCKS=true` skips all API calls and returns `mocks/run_response.json`.
 
+The 3-case profile resolution (+ merge) is factored into **`_resolve_profile(req) -> UnifiedProfile`**, shared by the JSON `/run` and the streaming `/run/stream` so the cases AND their Day-4 friendly error messages have one source of truth.
+
+## `routes/run.py` — POST /run/stream (phased progress)
+
+Additive streaming twin of `/run` for the home page's 2-step progress indicator. Emits `application/x-ndjson`, one `RunStreamEnvelope` per line:
+`profile`(state=working) → `profile`(state=done) → `internships`(state=working) → `done` (carries the full `RunResponse`).
+
+The no-input guard + `USE_MOCKS` short-circuit run **before** the `StreamingResponse` is constructed, so they still raise proper status codes. Profile + internship failures stream as an **`error` envelope** instead — a `StreamingResponse` locks its HTTP status at 200 the moment it starts, so the friendly Day-4 message is carried in `error.message` (byte-identical to what the JSON `/run` returns) and `error.status` is advisory (the home page only surfaces the message). This is the deliberate trade-off that lets the profile long-pole (the failure-prone part) show real progress; the JSON `/run` keeps full status-code granularity for any non-browser consumer. `timing_session`/`cost_session("/run/stream")` wrap the generator body so profile-extraction Claude spend is still captured.
+
 ## `routes/profile.py` — POST /profile/analyze
 
 Extracts `ProfileAnalysis` from raw LinkedIn data using Claude. Two-function module:
@@ -126,6 +135,16 @@ When `include.roadmap=true` but `gaps` is empty, `roadmap_note` is set to a cann
 **Phase 3 cache backfill:** in the cache-hit branch, if a stored full-mode row predates Phase 3 (missing `roadmap`/`project_suggestion`) and the request asks for them, `_phase3_backfill_cached_row` rehydrates `JobSummary`/`MatchItem`/`GapItem`/`Verdict` from the cached row, runs only the missing LLM calls using the live request profile, and writes the patched dict back. No job re-fetch, no Step A re-run.
 
 **Caching:** keyed by `analysis_cache_key(mode, profile_hash, job_id)`. `profile_hash` = sha256 of the **full** `profile.model_dump_json()` (fixes the old 500-char-truncation bug). 30-day TTL.
+
+## `routes/analyze.py` — POST /analyze/stream (full-mode true streaming)
+
+Additive streaming twin of `/analyze` full for the analyze page's progressive in-place render. Emits `application/x-ndjson`, one `AnalyzeStreamEnvelope` per line: `verdict` → `roadmap`/`project` (completion order) → `done`. The JSON `/analyze` is untouched (quick mode, detail-page cache re-reads, and any other caller still use it).
+
+- **Prelude before the stream:** `_analyze_stream_prelude(req)` runs the entire can-fail prefix — `_resolve_job` → user-cache check (incl. self-heal + `_phase3_backfill_cached_row`) → `extract_requirements` → `_run_matching` → scoring/matches/gaps/verdict + headline reconcile — and **raises `HTTPException` 422/500 here, before the `StreamingResponse` is constructed**, so the JSON endpoint's error contract is preserved with zero regression. (Phase 3, which streams, already swallows its own failures, so nothing in the streamed portion needs to surface as an HTTP error; the `"error"` phase is a defensive belt-and-suspenders only.) It returns either `("cache_hit", AnalysisResponse)` or `("computed", verdict_payload, cache_key, include)`.
+- **Cache hit:** `_cached_stream_envelopes(full)` replays the cached `AnalysisResponse` as the same `verdict → roadmap → project → done` sequence, so the frontend's stream-assembly path is identical for hits and misses.
+- **Computed:** the generator emits the `verdict` envelope (everything available right after matching), then `_stream_phase3(...)` — the async-generator twin of `_generate_phase3` — fires the same roadmap + project tasks concurrently but yields each as **it** completes (via `asyncio.wait(FIRST_COMPLETED)`, mapping task→kind), so whichever finishes first reaches the client first. Same no-gaps `roadmap_note` + failure-swallow semantics. After both, it assembles the full `AnalysisResponse`, writes `set_user_analysis_cache`, and emits `done`.
+- **Sessions / cost:** the prelude runs under its own `cost_session("/analyze/stream prelude")` (extract/match spend) and the generator under `cost_session("/analyze/stream phase3")` (Phase-3 spend) — **two `[cost]` ledgers print by design**, because a single `with` can't straddle the route's `return` of the StreamingResponse. Phase-3 tasks are created inside the generator's `cost_session` so the `_rows` contextvar propagates (same guarantee `/analyze/batch` relies on).
+- `_generate_phase3` itself is unchanged (still used by JSON `/analyze` + the cache backfill).
 
 ## `routes/analyze.py` — POST /analyze/batch
 

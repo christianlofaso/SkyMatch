@@ -53,20 +53,32 @@ This file is the always-loaded map. Deep reference lives in `docs/`; read the ma
 
 ```
 frontend (Next.js 14)
-  ├── POST /run                  → profile → internships  (served from the local index)
-  ├── POST /analyze              → job-fit scoring pipeline (mode: "full" | "quick")
-  ├── POST /analyze/batch        → ndjson stream of quick analyses across many jobs
+  ├── POST /run/stream           → profile → internships, phased-progress ndjson (home page)
+  ├── POST /analyze/stream       → job-fit full pipeline, progressive ndjson (analyze page)
+  ├── POST /analyze/batch        → ndjson stream of quick analyses across many jobs (results page)
+  ├── POST /internships/annotate → lazy per-role "why you fit" ndjson (card expand)
   └── POST /profile/from-resume  → resume parse → UnifiedProfile
 
 backend (FastAPI) — request path
   ├── /run                   → orchestrator (run.py) → search_internships (reads listing_store)
+  ├── /run/stream            → streaming twin of /run: profile→internships phase envelopes (run.py)
   ├── /profile/analyze       → Claude extraction (profile.py)
   ├── /profile/from-resume   → file upload → text → UnifiedProfile (resume.py)
   ├── /connections/suggest   → LinkdAPI + Claude (connections.py — dormant)
   ├── /internships/search    → serve from listing_store, zero-LLM rank + build (internships.py)
   ├── /internships/annotate  → deferred per-role fit text (ndjson stream) — slim Sonnet (internships.py)
   ├── /analyze               → site_handler → fetch → extract → quick OR full path (analyze.py)
+  ├── /analyze/stream        → streaming twin of /analyze full: verdict→roadmap→project ndjson (analyze.py)
   └── /analyze/batch         → bounded-concurrency quick analyses streamed back as ndjson
+
+  (All four ndjson streamers — /run/stream, /analyze/stream, /analyze/batch, /internships/annotate —
+   share one pattern: async-gen yielding `envelope.model_dump_json()+"\n"`, sessions opened INSIDE the
+   generator, and `cost_guard` as a yield-dependency, NOT middleware, so it doesn't buffer the
+   StreamingResponse. NOTE: /run/stream + /analyze/stream serialize WITHOUT exclude_none — their
+   envelopes wrap full data models (RunResponse / AnalysisResponse pieces) whose nullable fields the
+   Zod schemas require PRESENT, so exclude_none would drop them and break validation; the wrapper Zod
+   schemas mark off-phase fields nullable+optional. (batch/annotate use exclude_none — their payload
+   schemas are already nullish.) The JSON /run + /analyze stay intact as additive siblings.)
 
 ingestion (standalone, NOT in the request path)
   └── worker/ingest.py       → DDG + ATS APIs + Firecrawl → listing_store
@@ -182,12 +194,14 @@ pathfinder/
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | POST | `/run` | `RunRequest` (`url?`, `text?`, `profile_id?`) | `RunResponse` (`connections` is always `[]` — see note above) |
+| POST | `/run/stream` | `RunRequest` | `application/x-ndjson` — phased-progress twin of `/run`: one `RunStreamEnvelope` per line (`profile`/`internships`/`done`/`error`). The `done` line carries the full `RunResponse`. The home page uses this for a 2-step progress indicator. Mid-stream failures arrive as an `error` envelope (same friendly message as `/run`; HTTP status is advisory) since a stream locks status at 200. The JSON `/run` is unchanged |
 | POST | `/profile/analyze` | `RunRequest` | `ProfileAnalysis` |
 | POST | `/profile/from-resume` | `multipart/form-data` file | `{profile_id, profile}` |
 | POST | `/connections/suggest` | `ProfileAnalysis` | `list[Connection]` (10) — standalone route; **not called by `/run`** (dormant, being reworked) |
 | POST | `/internships/search` | `ProfileAnalysis` | `InternshipBuckets` — served from `listing_store` (index), **zero-LLM** (rank + deterministic build); `fit_explanation` ships empty and is filled via `/internships/annotate`. Exception: an **uncovered metro's first visit** triggers the bounded local live-fetch, which scrapes + **parses inline** (Haiku) before serving |
 | POST | `/internships/annotate` | `AnnotateRequest` (`profile`, `jobs: [{url, bucket}]`) | `application/x-ndjson` — one `AnnotateEnvelope` per line (`fit_explanation`/`reach_gap`), completion order; **lazy** "why you fit" (fired per role on card expand, not for the whole feed) — results cached in `annotate_cache` (per-(profile,role), 30d) |
 | POST | `/analyze` | `AnalyzeRequest` (`mode` defaults `"full"`; `include.{roadmap,project}` default `true` for full) | `AnalysisResponse` (full, incl. Phase 3) or `QuickAnalysisResponse` (quick) |
+| POST | `/analyze/stream` | `AnalyzeRequest` (full mode) | `application/x-ndjson` — true-streaming twin of `/analyze` full: one `AnalyzeStreamEnvelope` per line (`verdict` → `roadmap`/`project` in completion order → `done`). The analyze page renders progressively in-place. The **prelude** (resolve/extract/match/score) runs BEFORE the stream, so a bad page / no-requirements still raises a proper **422/500**; only the (failure-free) Phase 3 streams. Two `[cost]` ledgers print (prelude + phase3). The JSON `/analyze` is unchanged |
 | POST | `/analyze/batch` | `BatchAnalyzeRequest` (max 50 jobs) | `application/x-ndjson` — one `BatchEnvelope` per line, completion order |
 | GET | `/cost/summary` | `?days=N` (default 7) | spend + estimated cache savings + per-model/session breakdown + prompt-cache % from the `cost_events` ledger |
 | POST | `/admin/killswitch` | `{on: bool}` + `X-Admin-Token` header | toggles the manual kill switch (`app_flags.kill_switch`); halts all gated routes with `503` while on. `403` if `ADMIN_TOKEN` unset/mismatched |

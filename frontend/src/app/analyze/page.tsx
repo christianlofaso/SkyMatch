@@ -1,17 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { analyzeJob } from "@/lib/api";
-import type { UnifiedProfile } from "@/types/pathfinder";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { analyzeJobStream } from "@/lib/api";
+import {
+  AnalysisResponseSchema,
+  type AnalysisResponse,
+  type UnifiedProfile,
+} from "@/types/pathfinder";
+import VerdictCard from "@/components/VerdictCard";
+import BreakdownView from "@/components/BreakdownView";
 import { getRun, latestRunId, saveAnalysis } from "@/lib/storage";
 
 type Tab = "url" | "paste";
-type Status = "idle" | "loading" | "error";
+// "loading" = waiting for the verdict (fetch+extract+match); "streaming" = verdict shown,
+// Phase 3 filling in; "done" = stream complete; "error" = failed.
+type Status = "idle" | "loading" | "streaming" | "done" | "error";
 
-export default function AnalyzePage() {
-  const router = useRouter();
+function Pulse() {
+  return (
+    <span
+      className="inline-block w-2 h-2 rounded-full animate-pulse"
+      style={{ background: "var(--accent)" }}
+    />
+  );
+}
+
+function AnalyzePageInner() {
   const searchParams = useSearchParams();
   const prefilledUrl = searchParams.get("url") ?? "";
 
@@ -21,6 +37,10 @@ export default function AnalyzePage() {
   const [text, setText] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  const [result, setResult] = useState<AnalysisResponse | null>(null);
+  const [roadmapDone, setRoadmapDone] = useState(false);
+  const [projectDone, setProjectDone] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
   const autoSubmittedRef = useRef(false);
 
   // On mount: pick up the profile from the most recent saved run.
@@ -34,17 +54,69 @@ export default function AnalyzePage() {
       if (!profile) return;
       setStatus("loading");
       setErrorMsg("");
+      setResult(null);
+      setRoadmapDone(false);
+      setProjectDone(false);
+      setShowBreakdown(false);
+
+      const analysisId = Date.now().toString(36);
+      let acc: AnalysisResponse | null = null;
+
       try {
-        const result = await analyzeJob(profile, input, "full");
-        const analysisId = Date.now().toString(36);
-        saveAnalysis(analysisId, result);
-        router.push(`/analyze/${analysisId}`);
+        for await (const env of analyzeJobStream(profile, input)) {
+          if (env.phase === "verdict") {
+            // Everything available right after matching — roadmap/project are optional
+            // on AnalysisResponse, so this is already a valid (partial) object to render.
+            acc = {
+              fit_score: env.fit_score ?? 0,
+              category_scores: env.category_scores ?? {},
+              matches: env.matches ?? [],
+              gaps: env.gaps ?? [],
+              verdict: env.verdict ?? { call: "skip", reasoning: "" },
+              job_summary: env.job_summary ?? { title: "", company: "", key_requirements: [] },
+            };
+            setResult(acc);
+            setStatus("streaming");
+          } else if (env.phase === "roadmap") {
+            if (!acc) continue;
+            const merged: AnalysisResponse = {
+              ...acc,
+              roadmap: env.roadmap ?? null,
+              roadmap_note: env.roadmap_note ?? null,
+            };
+            acc = merged;
+            setResult(merged);
+            setRoadmapDone(true);
+          } else if (env.phase === "project") {
+            if (!acc) continue;
+            const merged: AnalysisResponse = { ...acc, project_suggestion: env.project_suggestion ?? null };
+            acc = merged;
+            setResult(merged);
+            setProjectDone(true);
+          } else if (env.phase === "done") {
+            setRoadmapDone(true);
+            setProjectDone(true);
+            if (acc) {
+              const parsed = AnalysisResponseSchema.safeParse(acc);
+              const final = parsed.success ? parsed.data : acc;
+              saveAnalysis(analysisId, final);
+              setResult(final);
+            }
+            setStatus("done");
+          } else if (env.phase === "error") {
+            setErrorMsg(env.error?.message ?? "Something went wrong.");
+            setStatus("error");
+            return;
+          }
+        }
+        // Stream ended without an explicit error — settle to done if a verdict arrived.
+        setStatus((s) => (s === "streaming" ? "done" : s === "loading" ? "error" : s));
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
         setStatus("error");
       }
     },
-    [profile, router],
+    [profile],
   );
 
   // Auto-submit when arriving with ?url=... once the profile has loaded.
@@ -58,14 +130,21 @@ export default function AnalyzePage() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!profile) return;
-    const input = tab === "url"
-      ? { job_url: url.trim() }
-      : { job_text: text.trim() };
+    const input = tab === "url" ? { job_url: url.trim() } : { job_text: text.trim() };
     if (!input.job_url && !input.job_text) return;
     void runAnalysis(input);
   }
 
+  function reset() {
+    setStatus("idle");
+    setResult(null);
+    setErrorMsg("");
+    setShowBreakdown(false);
+  }
+
   const loading = status === "loading";
+  const busy = status === "loading" || status === "streaming";
+  const showResults = result !== null && (status === "streaming" || status === "done");
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center px-6 py-20">
@@ -97,18 +176,14 @@ export default function AnalyzePage() {
             <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
               No profile found in this session.
             </p>
-            <Link
-              href="/"
-              className="mono text-sm font-medium"
-              style={{ color: "var(--accent)" }}
-            >
+            <Link href="/" className="mono text-sm font-medium" style={{ color: "var(--accent)" }}>
               run your profile first →
             </Link>
           </div>
         )}
 
-        {/* Profile badge */}
-        {profile && (
+        {/* Profile badge — hidden once results are showing to keep focus on the verdict */}
+        {profile && !showResults && (
           <div
             className="flex items-center gap-3 border px-4 py-3"
             style={{ borderColor: "var(--border)", background: "var(--surface)" }}
@@ -128,8 +203,8 @@ export default function AnalyzePage() {
           </div>
         )}
 
-        {/* Form — only shown when profile is available */}
-        {profile && (
+        {/* Form — only shown when no results are in view */}
+        {profile && !showResults && (
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             {/* Tab switcher */}
             <div className="flex border-b" style={{ borderColor: "var(--border)" }}>
@@ -183,10 +258,7 @@ export default function AnalyzePage() {
             >
               {loading ? (
                 <span className="flex items-center gap-2">
-                  <span
-                    className="inline-block w-2 h-2 rounded-full animate-pulse"
-                    style={{ background: "var(--accent)" }}
-                  />
+                  <Pulse />
                   analyzing fit...
                 </span>
               ) : (
@@ -196,17 +268,60 @@ export default function AnalyzePage() {
           </form>
         )}
 
+        {/* Results — render progressively as the stream fills in */}
+        {showResults && result && (
+          <div className="flex flex-col gap-6">
+            {/* Phase progress strip — honest per-phase status */}
+            <div className="mono text-xs flex items-center gap-4" style={{ color: "var(--text-secondary)" }}>
+              <span style={{ color: "var(--accent)" }}>✓ verdict</span>
+              <span className="flex items-center gap-1.5">
+                {roadmapDone ? <span style={{ color: "var(--accent)" }}>✓</span> : <Pulse />} roadmap
+              </span>
+              <span className="flex items-center gap-1.5">
+                {projectDone ? <span style={{ color: "var(--accent)" }}>✓</span> : <Pulse />} project
+              </span>
+            </div>
+
+            {showBreakdown ? (
+              <BreakdownView data={result} onBack={() => setShowBreakdown(false)} />
+            ) : (
+              <VerdictCard data={result} onShowBreakdown={() => setShowBreakdown(true)} />
+            )}
+
+            {/* New analysis */}
+            <button
+              type="button"
+              onClick={reset}
+              className="mono text-xs self-start hover:opacity-70 transition-opacity"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              ← analyze another job
+            </button>
+          </div>
+        )}
+
         {/* Error */}
         {status === "error" && errorMsg && (
-          <div
-            className="border p-4 text-sm"
-            style={{ borderColor: "#7f1d1d", color: "#ff6b6b" }}
-          >
+          <div className="border p-4 text-sm" style={{ borderColor: "#7f1d1d", color: "#ff6b6b" }}>
             {errorMsg}
           </div>
         )}
 
       </div>
     </main>
+  );
+}
+
+export default function AnalyzePage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen flex items-center justify-center">
+          <Pulse />
+        </main>
+      }
+    >
+      <AnalyzePageInner />
+    </Suspense>
   );
 }

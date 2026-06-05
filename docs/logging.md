@@ -48,9 +48,14 @@ Key `[analyze]` and `[batch]` log lines:
 [analyze] roadmap generation failed: <exc>
 [analyze] project_suggestion failed: <exc>
 [analyze] phase3 backfill: roadmap=yes|no project=yes|no
+[analyze/stream] job_id=... | user_cache=hit/miss | step B: N matches, N gaps, verdict=...
+[analyze/stream] roadmap|project generation failed: <exc>
+[run/stream] unexpected error resolving profile: <exc>
 [batch] user_cache=hit key=...
 [batch] job[i] failed code=FETCH_FAILED msg=...
 ```
+
+**Streaming-endpoint session names:** the four ndjson streamers open their `timing_session`/`cost_session` INSIDE the generator (so spend + timing are captured after the route returns). Session names: `/analyze/batch (N jobs)`, `/internships/annotate (N jobs)`, `/run/stream`, and — for `/analyze/stream` — **two** sessions: `"/analyze/stream prelude"` (extract + match spend, runs before the StreamingResponse) and `"/analyze/stream phase3"` (roadmap + project spend, inside the generator). So a single `/analyze/stream` request prints **two `[cost]` ledgers** by design — a single `with` can't straddle the route's `return` of the StreamingResponse.
 
 Frontend console (from `/results/[id]`):
 ```

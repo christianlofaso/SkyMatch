@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { parseResume, runPathfinder } from "@/lib/api";
+import { parseResume, runPathfinderStream } from "@/lib/api";
 import { type UnifiedProfile } from "@/types/pathfinder";
 import { listRuns, saveRun, removeRun, type RunIndexEntry } from "@/lib/storage";
 import { PreviousRuns } from "@/components/PreviousRuns";
@@ -11,6 +11,16 @@ import { PreviousRuns } from "@/components/PreviousRuns";
 type Tab = "url" | "paste";
 type Status = "idle" | "loading" | "error";
 type UploadStatus = "idle" | "uploading" | "done" | "error";
+type Step = "profile" | "internships" | null;
+
+function Pulse() {
+  return (
+    <span
+      className="inline-block w-2 h-2 rounded-full animate-pulse"
+      style={{ background: "var(--accent)" }}
+    />
+  );
+}
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_EXTS = [".pdf", ".docx"];
@@ -20,6 +30,7 @@ export default function Home() {
 
   const [tab, setTab] = useState<Tab>("url");
   const [status, setStatus] = useState<Status>("idle");
+  const [step, setStep] = useState<Step>(null);  // which /run phase is in flight
   const [errorMsg, setErrorMsg] = useState("");
 
   // LinkedIn inputs
@@ -110,16 +121,38 @@ export default function Home() {
     if (!("url" in payload) && !("text" in payload) && !("profile_id" in payload)) return;
 
     setStatus("loading");
+    setStep("profile");
     setErrorMsg("");
 
+    const runId = Date.now().toString(36);
     try {
-      const result = await runPathfinder(payload);
-      const runId = Date.now().toString(36);
-      saveRun(runId, result);
-      router.push(`/results/${runId}`);
+      let navigated = false;
+      for await (const env of runPathfinderStream(payload)) {
+        if (env.phase === "profile") {
+          setStep("profile");
+        } else if (env.phase === "internships") {
+          setStep("internships");
+        } else if (env.phase === "done" && env.data) {
+          // env.data is already validated by RunStreamEnvelopeSchema (RunResponseSchema).
+          saveRun(runId, env.data);
+          navigated = true;
+          router.push(`/results/${runId}`);
+        } else if (env.phase === "error") {
+          setErrorMsg(env.error?.message ?? "Something went wrong.");
+          setStatus("error");
+          setStep(null);
+          return;
+        }
+      }
+      if (!navigated) {
+        setErrorMsg("Something went wrong — please try again.");
+        setStatus("error");
+        setStep(null);
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
       setStatus("error");
+      setStep(null);
     }
   }
 
@@ -342,12 +375,25 @@ export default function Home() {
                        transition-colors disabled:opacity-50"
           >
             {loading ? (
-              <span className="flex items-center gap-2">
+              <span className="flex items-center justify-center gap-2.5 flex-wrap">
+                {/* Step 1: profile (done once internships starts) */}
+                <span className="flex items-center gap-1.5">
+                  {step === "internships" ? (
+                    <span style={{ color: "var(--accent)" }}>✓</span>
+                  ) : (
+                    <Pulse />
+                  )}
+                  {hasLinkedin && hasResume ? "merging profile" : "analyzing profile"}
+                </span>
+                <span style={{ opacity: 0.4 }}>·</span>
+                {/* Step 2: internships */}
                 <span
-                  className="inline-block w-2 h-2 rounded-full animate-pulse"
-                  style={{ background: "var(--accent)" }}
-                />
-                {hasLinkedin && hasResume ? "merging profiles..." : "analyzing profile..."}
+                  className="flex items-center gap-1.5"
+                  style={{ opacity: step === "internships" ? 1 : 0.45 }}
+                >
+                  {step === "internships" ? <Pulse /> : <span style={{ opacity: 0.6 }}>○</span>}
+                  finding internships
+                </span>
               </span>
             ) : (
               "find my path →"

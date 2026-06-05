@@ -1,16 +1,21 @@
 import asyncio
 import json
 import os
+import traceback
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from cache import get_profile_cache, get_run_cache, set_profile_cache, set_run_cache, text_cache_key
 from lib.cost import cost_session
 from lib.timing import timed, timed_call, timing_session
 from routes.internships import search_internships
 from routes.profile import analyze_profile, extract_rich_fields
-from schemas import RunRequest, RunResponse, UnifiedProfile, SkillEntry, WorkEntry, EducationEntry, ProjectEntry
+from schemas import (
+    RunRequest, RunResponse, UnifiedProfile, SkillEntry, WorkEntry, EducationEntry, ProjectEntry,
+    RunStreamEnvelope, RunStreamError,
+)
 
 router = APIRouter()
 
@@ -156,27 +161,24 @@ async def run(req: RunRequest):
         return await _run_impl(req)
 
 
-async def _run_impl(req: RunRequest):
+async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
+    """Resolve the unified profile from url/text/profile_id — the 3 input cases +
+    merge — preserving the Day-4 friendly HTTPException mapping verbatim. Shared by
+    the JSON /run and the streaming /run/stream so the cases (and their friendly
+    error messages) have ONE source of truth. Does NOT handle USE_MOCKS or the
+    no-input guard — callers do that before reaching here."""
     has_linkedin = bool(req.url or req.text)
     has_resume = bool(req.profile_id)
-
-    if not has_linkedin and not has_resume:
-        raise HTTPException(status_code=422, detail="Provide url, text, or profile_id.")
-
-    # Mock mode — returns hardcoded data, no API calls
-    if USE_MOCKS:
-        with open(MOCK_PATH) as f:
-            return RunResponse(**json.load(f))
 
     # ── CASE 1: Resume only — fast path ───────────────────────────────────────
     if has_resume and not has_linkedin:
         cached = get_profile_cache(req.profile_id)
         if not cached:
             raise HTTPException(status_code=404, detail="profile_id not found. Re-upload the resume.")
-        profile = UnifiedProfile(**cached)
+        return UnifiedProfile(**cached)
 
     # ── CASE 2: LinkedIn / paste only ────────────────────────────────────────
-    elif has_linkedin and not has_resume:
+    if has_linkedin and not has_resume:
         cache_key = req.url if req.url else text_cache_key(req.text or "")
         cached = get_profile_cache(cache_key)
         if cached and "sources" in cached:
@@ -211,6 +213,7 @@ async def _run_impl(req: RunRequest):
                 certifications=rich_data.get("certifications", []),
             )
             set_profile_cache(cache_key, profile.model_dump())
+        return profile
 
     # ── CASE 3: Both LinkedIn and resume ─────────────────────────────────────
     else:
@@ -256,6 +259,22 @@ async def _run_impl(req: RunRequest):
 
         profile = _merge_profiles(linkedin_profile, resume_profile)
         set_profile_cache(f"merged:{linkedin_cache_key}:{req.profile_id}", profile.model_dump())
+        return profile
+
+
+async def _run_impl(req: RunRequest):
+    has_linkedin = bool(req.url or req.text)
+    has_resume = bool(req.profile_id)
+
+    if not has_linkedin and not has_resume:
+        raise HTTPException(status_code=422, detail="Provide url, text, or profile_id.")
+
+    # Mock mode — returns hardcoded data, no API calls
+    if USE_MOCKS:
+        with open(MOCK_PATH) as f:
+            return RunResponse(**json.load(f))
+
+    profile = await _resolve_profile(req)
 
     # ── Internships ───────────────────────────────────────────────────────────
     # Connections (LinkedIn warm-intro search) is temporarily removed from /run —
@@ -266,8 +285,7 @@ async def _run_impl(req: RunRequest):
         internships = await timed_call("internships (branch total)", search_internships(profile))
     except HTTPException:
         raise
-    except Exception as e:
-        import traceback
+    except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Couldn't load internship matches right now. Please try again.")
 
@@ -275,3 +293,81 @@ async def _run_impl(req: RunRequest):
     run_cache_key = req.profile_id or (req.url if req.url else text_cache_key(req.text or ""))
     set_run_cache(run_cache_key, result.model_dump())
     return result
+
+
+# ── Streaming /run (phased progress) ───────────────────────────────────────────
+
+_NDJSON_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+
+
+@router.post("/run/stream")
+async def run_stream(req: RunRequest):
+    """Additive streaming twin of POST /run. Emits ndjson RunStreamEnvelopes so
+    the home page shows real phase progress: profile(working→done) → internships
+    (working) → done(full RunResponse). The no-input guard + USE_MOCKS short-circuit
+    run BEFORE the StreamingResponse, so those raise proper status codes. Profile +
+    internship failures stream as a typed error envelope carrying the SAME friendly
+    message the JSON /run returns (status is locked at 200 once a stream starts).
+    The JSON /run is unchanged."""
+    if not (req.url or req.text or req.profile_id):
+        raise HTTPException(status_code=422, detail="Provide url, text, or profile_id.")
+
+    if USE_MOCKS:
+        with open(MOCK_PATH) as f:
+            mock = RunResponse(**json.load(f))
+
+        async def _mock_gen():
+            yield RunStreamEnvelope(phase="done", data=mock).model_dump_json() + "\n"
+
+        return StreamingResponse(_mock_gen(), media_type="application/x-ndjson", headers=_NDJSON_HEADERS)
+
+    async def _gen():
+        # Sessions wrap the generator body so the profile-extraction Claude spend +
+        # [timing] breakdown are still captured (mirrors /analyze/batch).
+        with timing_session("/run/stream"), cost_session("/run/stream"):
+            yield RunStreamEnvelope(phase="profile", state="working").model_dump_json() + "\n"
+            try:
+                profile = await _resolve_profile(req)
+            except HTTPException as exc:
+                msg = exc.detail if isinstance(exc.detail, str) else "Couldn't read your profile. Please try again, or paste your profile text."
+                yield RunStreamEnvelope(
+                    phase="error", error=RunStreamError(message=msg, status=exc.status_code)
+                ).model_dump_json() + "\n"
+                return
+            except Exception as e:
+                print(f"[run/stream] unexpected error resolving profile: {e!r}")
+                yield RunStreamEnvelope(
+                    phase="error",
+                    error=RunStreamError(
+                        message="Couldn't read your profile. Please try again, or paste your profile text.",
+                        status=500,
+                    ),
+                ).model_dump_json() + "\n"
+                return
+
+            yield RunStreamEnvelope(phase="profile", state="done").model_dump_json() + "\n"
+            yield RunStreamEnvelope(phase="internships", state="working").model_dump_json() + "\n"
+            try:
+                internships = await timed_call("internships (branch total)", search_internships(profile))
+            except HTTPException as exc:
+                msg = exc.detail if isinstance(exc.detail, str) else "Couldn't load internship matches right now. Please try again."
+                yield RunStreamEnvelope(
+                    phase="error", error=RunStreamError(message=msg, status=exc.status_code)
+                ).model_dump_json() + "\n"
+                return
+            except Exception:
+                traceback.print_exc()
+                yield RunStreamEnvelope(
+                    phase="error",
+                    error=RunStreamError(
+                        message="Couldn't load internship matches right now. Please try again.", status=500
+                    ),
+                ).model_dump_json() + "\n"
+                return
+
+            result = RunResponse(profile=profile, connections=[], internships=internships)
+            run_cache_key = req.profile_id or (req.url if req.url else text_cache_key(req.text or ""))
+            set_run_cache(run_cache_key, result.model_dump())
+            yield RunStreamEnvelope(phase="done", data=result).model_dump_json() + "\n"
+
+    return StreamingResponse(_gen(), media_type="application/x-ndjson", headers=_NDJSON_HEADERS)

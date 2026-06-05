@@ -204,6 +204,38 @@ export const AnnotateEnvelopeSchema = z.object({
     .optional(),
 });
 
+// Progressive phase envelope streamed by POST /analyze/stream (full mode). Each line
+// carries one phase; the frontend merges payloads into a partial AnalysisResponse.
+// Mirror of backend routes/analyze.py AnalyzeStreamEnvelope.
+// Every payload field is nullable+optional: the backend serializes without exclude_none,
+// so off-phase fields arrive as null (not absent), and the nested data models keep their
+// own nulls (matching AnalysisResponseSchema, used by the non-streaming path too).
+export const AnalyzeStreamEnvelopeSchema = z.object({
+  phase: z.enum(["verdict", "roadmap", "project", "done", "error"]),
+  // verdict payload
+  fit_score: z.number().int().nullable().optional(),
+  category_scores: z.record(z.string(), z.number().int()).nullable().optional(),
+  matches: z.array(MatchItemSchema).nullable().optional(),
+  gaps: z.array(GapItemSchema).nullable().optional(),
+  verdict: VerdictSchema.nullable().optional(),
+  job_summary: JobSummarySchema.nullable().optional(),
+  // roadmap payload
+  roadmap: RoadmapSchema.nullable().optional(),
+  roadmap_note: z.string().nullable().optional(),
+  // project payload
+  project_suggestion: ProjectSuggestionSchema.nullable().optional(),
+  // error payload
+  error: z.object({ message: z.string(), status: z.number().int() }).nullable().optional(),
+});
+
+// Phase envelope streamed by POST /run/stream. Mirror of backend schemas.py RunStreamEnvelope.
+export const RunStreamEnvelopeSchema = z.object({
+  phase: z.enum(["profile", "internships", "done", "error"]),
+  state: z.enum(["working", "done"]).nullable().optional(),
+  data: RunResponseSchema.nullable().optional(),
+  error: z.object({ message: z.string(), status: z.number().int() }).nullable().optional(),
+});
+
 // --- Inferred TypeScript types ---
 
 export type ProfileAnalysis = z.infer<typeof ProfileAnalysisSchema>;
@@ -229,3 +261,5 @@ export type QuickJobSummary = z.infer<typeof QuickJobSummarySchema>;
 export type QuickAnalysisResponse = z.infer<typeof QuickAnalysisResponseSchema>;
 export type BatchEnvelope = z.infer<typeof BatchEnvelopeSchema>;
 export type AnnotateEnvelope = z.infer<typeof AnnotateEnvelopeSchema>;
+export type AnalyzeStreamEnvelope = z.infer<typeof AnalyzeStreamEnvelopeSchema>;
+export type RunStreamEnvelope = z.infer<typeof RunStreamEnvelopeSchema>;

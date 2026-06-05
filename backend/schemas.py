@@ -126,3 +126,24 @@ class RunResponse(BaseModel):
     profile: UnifiedProfile
     connections: list[Connection] = []  # populated by /connections/suggest; /run returns []
     internships: InternshipBuckets
+
+
+# ── /run/stream envelopes (phased progress) ──────────────────────────────────
+# Additive sibling of POST /run: streams ndjson phase envelopes so the home page
+# can show the profile long-pole (the failure-prone part) progressing in real time.
+# Unlike the JSON /run, mid-stream failures arrive as a typed error envelope (the
+# StreamingResponse status is locked at 200 once it starts) — the `message` is the
+# SAME friendly text the JSON /run would return, and `status` carries the HTTP code
+# it WOULD have used (advisory; the home page only surfaces the message).
+# Mirror: frontend/src/types/pathfinder.ts RunStreamEnvelopeSchema.
+
+class RunStreamError(BaseModel):
+    message: str
+    status: int  # advisory: the HTTP status the JSON /run would have returned (422/503/504/502/500)
+
+
+class RunStreamEnvelope(BaseModel):
+    phase: Literal["profile", "internships", "done", "error"]
+    state: Literal["working", "done"] | None = None  # progress marker for profile/internships
+    data: RunResponse | None = None                  # present on phase == "done"
+    error: RunStreamError | None = None              # present on phase == "error"

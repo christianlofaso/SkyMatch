@@ -4,11 +4,15 @@ import {
   AnalysisResponseSchema,
   BatchEnvelopeSchema,
   AnnotateEnvelopeSchema,
+  AnalyzeStreamEnvelopeSchema,
+  RunStreamEnvelopeSchema,
   type RunResponse,
   type UnifiedProfile,
   type AnalysisResponse,
   type BatchEnvelope,
   type AnnotateEnvelope,
+  type AnalyzeStreamEnvelope,
+  type RunStreamEnvelope,
 } from "@/types/pathfinder";
 
 type AnnotateJob = { url: string; bucket: "local" | "big_tech" | "startup" | "reach" };
@@ -174,6 +178,100 @@ export async function* annotateFit(
         yield env;
       } catch (e) {
         console.warn("[annotateFit] skipped malformed line", line, e);
+      }
+    }
+  }
+}
+
+/**
+ * POSTs a full-mode analyze and yields AnalyzeStreamEnvelope objects as the server
+ * streams them (ndjson): "verdict" first, then "roadmap"/"project" in completion order,
+ * then "done". The page assembles them into a partial AnalysisResponse and renders
+ * progressively. Pre-stream failures (bad fetch / no requirements) surface as a thrown
+ * Error with the server's friendly message, same as analyzeJob. Same streaming shape as
+ * analyzeBatch. The single-shot analyzeJob() stays for cache re-reads + quick mode.
+ */
+export async function* analyzeJobStream(
+  profile: UnifiedProfile,
+  input: { job_url?: string; job_text?: string },
+  signal?: AbortSignal,
+): AsyncGenerator<AnalyzeStreamEnvelope, void, void> {
+  const res = await fetch(`${API_BASE}/analyze/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profile, mode: "full", ...input }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+    throw new Error(err.detail ?? `HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const env = AnalyzeStreamEnvelopeSchema.parse(JSON.parse(line));
+        yield env;
+      } catch (e) {
+        console.warn("[analyzeJobStream] skipped malformed line", line, e);
+      }
+    }
+  }
+}
+
+/**
+ * POSTs /run and yields RunStreamEnvelope objects as the server streams the phases
+ * (ndjson): profile(working→done) → internships(working) → done(full RunResponse), or
+ * an "error" envelope carrying the friendly message. The home page shows a 2-step
+ * progress indicator and navigates on "done". Same streaming shape as analyzeBatch.
+ * The single-shot runPathfinder() stays for any non-streaming caller.
+ */
+export async function* runPathfinderStream(
+  input: { url?: string; text?: string; profile_id?: string },
+  signal?: AbortSignal,
+): AsyncGenerator<RunStreamEnvelope, void, void> {
+  const res = await fetch(`${API_BASE}/run/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+    throw new Error(err.detail ?? `HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const env = RunStreamEnvelopeSchema.parse(JSON.parse(line));
+        yield env;
+      } catch (e) {
+        console.warn("[runPathfinderStream] skipped malformed line", line, e);
       }
     }
   }
