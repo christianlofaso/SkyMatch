@@ -172,7 +172,7 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
 
     # ── CASE 1: Resume only — fast path ───────────────────────────────────────
     if has_resume and not has_linkedin:
-        cached = get_profile_cache(req.profile_id)
+        cached = await asyncio.to_thread(get_profile_cache, req.profile_id)
         if not cached:
             raise HTTPException(status_code=404, detail="profile_id not found. Re-upload the resume.")
         return UnifiedProfile(**cached)
@@ -180,7 +180,7 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
     # ── CASE 2: LinkedIn / paste only ────────────────────────────────────────
     if has_linkedin and not has_resume:
         cache_key = req.url if req.url else text_cache_key(req.text or "")
-        cached = get_profile_cache(cache_key)
+        cached = await asyncio.to_thread(get_profile_cache, cache_key)
         if cached and "sources" in cached:
             profile = UnifiedProfile(**cached)
         else:
@@ -212,18 +212,18 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
                 projects=rich_data.get("projects", []),
                 certifications=rich_data.get("certifications", []),
             )
-            set_profile_cache(cache_key, profile.model_dump())
+            await asyncio.to_thread(set_profile_cache, cache_key, profile.model_dump())
         return profile
 
     # ── CASE 3: Both LinkedIn and resume ─────────────────────────────────────
     else:
-        resume_cached = get_profile_cache(req.profile_id)
+        resume_cached = await asyncio.to_thread(get_profile_cache, req.profile_id)
         if not resume_cached:
             raise HTTPException(status_code=404, detail="profile_id not found. Re-upload the resume.")
         resume_profile = UnifiedProfile(**resume_cached)
 
         linkedin_cache_key = req.url if req.url else text_cache_key(req.text or "")
-        linkedin_cached = get_profile_cache(linkedin_cache_key)
+        linkedin_cached = await asyncio.to_thread(get_profile_cache, linkedin_cache_key)
         if linkedin_cached and "sources" in linkedin_cached:
             linkedin_profile = UnifiedProfile(**linkedin_cached)
         else:
@@ -255,10 +255,10 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
                 projects=rich_data.get("projects", []),
                 certifications=rich_data.get("certifications", []),
             )
-            set_profile_cache(linkedin_cache_key, linkedin_profile.model_dump())
+            await asyncio.to_thread(set_profile_cache, linkedin_cache_key, linkedin_profile.model_dump())
 
         profile = _merge_profiles(linkedin_profile, resume_profile)
-        set_profile_cache(f"merged:{linkedin_cache_key}:{req.profile_id}", profile.model_dump())
+        await asyncio.to_thread(set_profile_cache, f"merged:{linkedin_cache_key}:{req.profile_id}", profile.model_dump())
         return profile
 
 

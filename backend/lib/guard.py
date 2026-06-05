@@ -15,6 +15,7 @@ Attached to the gated routers in main.py via dependencies=[Depends(cost_guard)];
 /health, /cost/summary and /admin/* are intentionally NOT gated so observability and
 recovery stay reachable while a halt is active.
 """
+import asyncio
 import os
 import time
 from collections import defaultdict, deque
@@ -132,7 +133,11 @@ def _release(ip: str) -> None:
 async def cost_guard(request: Request):
     """Dependency for LLM-firing routes: halt on kill switch (503), enforce per-IP
     rate + concurrency limits (429), and account for the in-flight request."""
-    reason = _halt_reason()
+    # _halt_reason does blocking Postgres reads (get_flag + the cached spend sum) — run it
+    # off the event loop so a slow DB round-trip can't stall other in-flight requests. One
+    # thread hop per gated request covers both reads. (status_snapshot stays sync: it's
+    # only called from the sync /admin/status route, which FastAPI already threadpools.)
+    reason = await asyncio.to_thread(_halt_reason)
     if reason:
         raise HTTPException(status_code=503, detail=reason)
 

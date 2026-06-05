@@ -50,7 +50,7 @@ async def from_resume(file: UploadFile = File(...)) -> dict:
 
     # --- Check cache before any parsing ---
     cache_key = text_cache_key(data.hex()[:500])
-    cached = get_profile_cache(cache_key)
+    cached = await asyncio.to_thread(get_profile_cache, cache_key)
     if cached:
         return {"profile_id": cache_key, "profile": cached}
 
@@ -95,5 +95,5 @@ async def from_resume(file: UploadFile = File(...)) -> dict:
         certifications=rich_data.get("certifications", []),
     )
 
-    set_profile_cache(cache_key, profile.model_dump())
+    await asyncio.to_thread(set_profile_cache, cache_key, profile.model_dump())
     return {"profile_id": cache_key, "profile": profile.model_dump()}

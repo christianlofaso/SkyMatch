@@ -51,7 +51,7 @@ def _strip_fences(raw: str) -> str:
 async def _search_once(linkd: LinkdClient, filters: dict) -> list:
     """Run a single people search and return raw results list, with cache."""
     fhash = hash_filters(filters)
-    cached = get_people_cache(fhash)
+    cached = await asyncio.to_thread(get_people_cache, fhash)
     if cached is not None:
         return cached
 
@@ -65,7 +65,7 @@ async def _search_once(linkd: LinkdClient, filters: dict) -> list:
     except Exception:
         results = []
 
-    set_people_cache(fhash, results)
+    await asyncio.to_thread(set_people_cache, fhash, results)
     return results
 
 

@@ -39,7 +39,7 @@ This file is the always-loaded map. Deep reference lives in `docs/`; read the ma
 |------|----------------------|
 | [docs/data-models.md](docs/data-models.md) | adding/changing a field, or need the exact shape of any Pydantic/Zod model (Profile, Analysis, Roadmap, Batch, etc.) |
 | [docs/routes.md](docs/routes.md) | editing any backend route — `/run` orchestration + merge, the index-served internships pipeline + ingestion worker, `/analyze` full/quick pipeline + Phase 3, batch, connections, and the URL-validation DROP POLICY |
-| [docs/caching.md](docs/caching.md) | touching cache keys, TTLs, or the SQLite tables in `pathfinder_cache.db` — including the `listing_store` index + `metro_rotation` |
+| [docs/caching.md](docs/caching.md) | touching cache keys, TTLs, or the Postgres tables (`db.py` pool + `alembic/` schema) — including the `listing_store` index + `metro_rotation` |
 | [docs/frontend.md](docs/frontend.md) | working on pages, components, theme/CSS vars, sessionStorage flow, or type safety |
 | [docs/logging.md](docs/logging.md) | reading logs or adding a log line — `[analyze]`/`[timing]`/`[cost]`/`[validate]` conventions |
 | [docs/development.md](docs/development.md) | doing a recurring task — adding a profile field, site handler, bucket, model constant, tuning weights, adjusting Phase 3 / batch knobs |
@@ -85,13 +85,27 @@ ingestion (standalone, NOT in the request path)
                                (national pool: startup/big_tech, per-metro local, reach pool)
 ```
 
-**Backend stack:** Python 3.12, FastAPI, Anthropic SDK, httpx (async HTTP), LinkdAPI, DuckDuckGo (`ddgs`), Firecrawl (SPA scraping), pdfplumber + python-docx (resume parsing), SQLite (caching), Pydantic v2, python-dotenv. **DDG/ATS/Firecrawl scraping is now ingestion-side** (`worker/ingest.py` → `lib/ingest_core.py`), not in the request path. Model IDs are centralized in `backend/config/models.py` (`MODEL_FULL = claude-opus-4-8`, `MODEL_MID = claude-sonnet-4-6`, `MODEL_QUICK = claude-haiku-4-5`). `analyze.py`, `profile.py`, and `internships.py` import from there — **`MODEL_MID` (Sonnet) runs the extraction/annotation-style calls** (profile + rich-field extraction in `profile.py`; in `internships.py`, **only** the deferred per-role **fit annotation** (`POST /internships/annotate`) — the request path / `search_internships` is now zero-LLM; in `analyze.py`, requirement **extraction** + evidence **matching**) where Opus latency isn't justified. In `analyze.py`, **`MODEL_FULL` (Opus) still runs Phase 3** (`_run_roadmap` + `_run_project_suggestion`) — the dominant `/analyze` cost (~80%; roadmap retries). `connections.py` still inlines its own `claude-opus-4-8` model string. **All routes share ONE Anthropic client from `lib/anthropic_client.py`** (raised `max_retries` for SDK 429 backoff) and gate every Sonnet call through the process-wide `sonnet_sem` rate-limit governor — see the gotcha below. The worker makes **zero Claude calls** (pure discovery/enrich/validate). A `backend/site_handlers/` package handles vendor SPA career portals (Microsoft today, Workday/SuccessFactors/iCIMS in future).
+**Backend stack:** Python 3.12, FastAPI, Anthropic SDK, httpx (async HTTP), LinkdAPI, DuckDuckGo (`ddgs`), Firecrawl (SPA scraping), pdfplumber + python-docx (resume parsing), Postgres (Supabase in prod) via `psycopg` v3 + `psycopg_pool` with Alembic migrations (caching + the `listing_store` index — see `db.py`/`cache.py`/`alembic/`), Pydantic v2, python-dotenv. **DDG/ATS/Firecrawl scraping is now ingestion-side** (`worker/ingest.py` → `lib/ingest_core.py`), not in the request path. Model IDs are centralized in `backend/config/models.py` (`MODEL_FULL = claude-opus-4-8`, `MODEL_MID = claude-sonnet-4-6`, `MODEL_QUICK = claude-haiku-4-5`). `analyze.py`, `profile.py`, and `internships.py` import from there — **`MODEL_MID` (Sonnet) runs the extraction/annotation-style calls** (profile + rich-field extraction in `profile.py`; in `internships.py`, **only** the deferred per-role **fit annotation** (`POST /internships/annotate`) — the request path / `search_internships` is now zero-LLM; in `analyze.py`, requirement **extraction** + evidence **matching**) where Opus latency isn't justified. In `analyze.py`, **`MODEL_FULL` (Opus) still runs Phase 3** (`_run_roadmap` + `_run_project_suggestion`) — the dominant `/analyze` cost (~80%; roadmap retries). `connections.py` still inlines its own `claude-opus-4-8` model string. **All routes share ONE Anthropic client from `lib/anthropic_client.py`** (raised `max_retries` for SDK 429 backoff) and gate every Sonnet call through the process-wide `sonnet_sem` rate-limit governor — see the gotcha below. The worker fires **no Sonnet/Opus calls**, but its **parse pass does make cheap Haiku + Voyage calls** (`worker/ingest.py` `parse_pass` → `lib/listing_parser.py` + `lib/embeddings.py`) — both keys optional; absent → rows stay unparsed and serving falls back. A `backend/site_handlers/` package handles vendor SPA career portals (Microsoft today, Workday/SuccessFactors/iCIMS in future).
 
 **Frontend stack:** Next.js 14 App Router, React 18, TypeScript, Tailwind CSS, Zod (runtime validation).
 
 ---
 
 ## Running the project
+
+### Database (Postgres)
+The data layer is **Postgres** (Supabase in prod), not SQLite. Start a local DB and apply
+migrations before running the backend or worker:
+```
+cd backend
+docker compose up -d db        # local Postgres (postgres:16) on :5432 — or point DATABASE_URL at a Supabase project
+venv\Scripts\activate
+alembic upgrade head           # create the 16 tables + indexes + seed metro_rotation
+```
+Schema is owned by **Alembic** (`alembic/versions/`), NOT by app code — `init_db()` now only
+warms the connection pool (`db.py`). `DATABASE_URL` = runtime (Supabase pgBouncer **pooler**,
+6543, in prod); `ALEMBIC_DATABASE_URL` = migrations (Supabase **direct**, 5432). Locally both
+can be the same local URL. New migration: `alembic revision -m "..."` then edit + `upgrade head`.
 
 ### Backend
 ```
@@ -108,7 +122,7 @@ cd backend
 venv\Scripts\activate
 python -m worker.ingest        # one pass: national pool + per-rotation-metro local + reach pool
 ```
-Run on a schedule (Windows Task Scheduler / cron, ~6h) so the index stays fresh — see the docstring in `worker/ingest.py`. It's a separate process from uvicorn; the DB uses WAL so they can read/write concurrently. `/run` serves whatever is currently in `listing_store`, so **run the worker at least once before the first `/run`** (an empty index → empty national buckets).
+Run on a schedule (Windows Task Scheduler / cron, ~6h) so the index stays fresh — see the docstring in `worker/ingest.py`. It's a separate process from uvicorn; both connect to the same Postgres (`DATABASE_URL`) and Postgres MVCC handles concurrent read/write. `/run` serves whatever is currently in `listing_store`, so **run the worker at least once before the first `/run`** (an empty index → empty national buckets).
 
 ### Frontend
 ```
@@ -122,6 +136,10 @@ Copy `.env.example` to `.env` in `backend/` and fill in:
 ```
 ANTHROPIC_API_KEY=...         # Claude API (required)
 LINKDAPI_KEY=...              # LinkdAPI key (required for /run)
+DATABASE_URL=...              # Postgres runtime conn (required). Prod: Supabase pgBouncer POOLER (6543). Local: docker-compose db
+ALEMBIC_DATABASE_URL=...      # Postgres migrations conn (required). Prod: Supabase DIRECT (5432). Local: same as DATABASE_URL
+DB_POOL_MIN=1                 # Connection-pool min (db.py); optional, default 1
+DB_POOL_MAX=5                 # Connection-pool max; optional, default 5 — budget Supabase backend cap across replicas+worker
 USE_MOCKS=false               # Return hardcoded mock data — set true for dev without real calls
 FIRECRAWL_API_KEY=...         # Firecrawl (JS-heavy /analyze URLs + internship liveness for wellfound/SPA listings)
 FIRECRAWL_WAIT_MS=5000        # How long to wait for JS render (ms); default 5000
@@ -152,7 +170,9 @@ pathfinder/
 │   ├── main.py                  # FastAPI app + CORS + router registration + init_db()
 │   ├── schemas.py               # All Pydantic models (single source of truth for data shapes)
 │   ├── linkd.py                 # Async LinkdAPI client
-│   ├── cache.py                 # SQLite helpers — per-blob caches + listing_store (queryable index) + metro_rotation
+│   ├── db.py                    # Postgres connection pool + get_db()/init_db() (psycopg_pool; pgBouncer-safe)
+│   ├── cache.py                 # Postgres data-access helpers — per-blob caches + listing_store (queryable index) + metro_rotation
+│   ├── alembic/                 # Schema migrations (0001_initial_schema = the 16 tables + indexes); owns DDL (init_db no longer does)
 │   ├── mocks/run_response.json  # Hardcoded response used when USE_MOCKS=true
 │   ├── worker/
 │   │   └── ingest.py               # Standalone ingestion worker (python -m worker.ingest) → listing_store; no Claude calls
@@ -219,7 +239,7 @@ pathfinder/
 - **DDGS is synchronous, not thread-safe, and can hang for minutes** when rate-limited — each thread instantiates its own `DDGS()`, bounded by `asyncio.wait_for`. It now runs **only in the worker** (`lib/ingest_core.py`); the request path hits it solely via the bounded local live-fetch fallback (`_live_local_fetch`, ~35s budget).
 - **`listing_store` keying is `PRIMARY KEY (niche_key, bucket, url)`** — the same URL legitimately lives in multiple contexts (a Stripe listing is big_tech for every field AND in `_reach`). Local rows are keyed by the **`_parse_metro` output** — the worker, serving, and `metro_rotation` must ALL key on parsed metros, never a raw profile location, or covered-metro lookups silently miss.
 - **The worker forces UTF-8 stdout** (`sys.stdout.reconfigure`) — as a standalone process with redirected output, Windows defaults to cp1252 and a stray `→`/non-ASCII char in a log line crashes the whole run. Keep that guard.
-- **`pathfinder_cache.db` uses WAL** (set in `init_db`) so the worker process and uvicorn can read/write concurrently — `.db-wal`/`.db-shm` sidecar files are normal (gitignore them).
+- **The data layer is Postgres** (`db.py` → `psycopg_pool.ConnectionPool`), shared by uvicorn and the worker; Postgres MVCC handles concurrent read/write (no WAL/sidecar files). **Prod uses the Supabase pgBouncer pooler in transaction mode, so the pool sets `prepare_threshold=None`** (server-side prepared statements break under transaction pooling) — keep that. `cache.py` stays **synchronous**; async routes call it through `asyncio.to_thread` (same discipline as the synchronous Anthropic SDK) so a DB round-trip never blocks the event loop. Schema lives in `alembic/`, not `init_db()`.
 - **Opus 4.8 rejects `temperature`/`top_p`/`top_k`** (400). No sampling params on `MODEL_FULL` calls; Haiku quick-verdict keeps `temperature`.
 - **`MODEL_MID` (Sonnet) sometimes wraps JSON answers in reasoning prose** (`"Looking at the listings:…"` then the array), despite "respond with ONLY JSON" — which breaks a plain `json.loads`. `internships.py`'s shared `_parse_json_with_context` falls back to `_extract_json_value` (scans for the first `[`/`{` that `raw_decode`s) to recover it; reuse that path for any new Sonnet JSON call rather than `json.loads` directly.
 - **`max_tokens` truncation surfaces as a "retry" badge** — Opus 4.8 runs long; extraction is 2048, roadmap 4096, evidence 2048. Internships serving is zero-LLM; the only Internships call is the deferred fit annotation (`/internships/annotate`) at a small 160-token cap (~2-sentence `fit_explanation` +reach_gap) — see [docs/routes.md](docs/routes.md).

@@ -77,7 +77,7 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
             )
 
     cache_key = req.url if req.url else text_cache_key(req.text or "")
-    cached = get_profile_cache(cache_key)
+    cached = await asyncio.to_thread(get_profile_cache, cache_key)
     if cached:
         return ProfileAnalysis(**cached)
 
@@ -162,7 +162,7 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
             "Try the 'Paste text' tab: open your LinkedIn profile, copy all the text, and paste it."
         ) from exc
 
-    set_profile_cache(cache_key, result.model_dump())
+    await asyncio.to_thread(set_profile_cache, cache_key, result.model_dump())
     return result
 
 

@@ -474,8 +474,8 @@ async def _live_local_fetch(profile: ProfileAnalysis, metro: str) -> list[dict]:
         kept: list[dict] = []
         for listing, ok, reason in results:
             if ok:
-                upsert_listing(listing, bucket="local", niche_key=metro,
-                               status="valid", validation_reason=reason)
+                await asyncio.to_thread(upsert_listing, listing, bucket="local", niche_key=metro,
+                                        status="valid", validation_reason=reason)
                 kept.append({**listing, "niche_key": metro, "bucket": "local"})
         if kept:
             # firecrawl_company=False: local hits only ATS boards (greenhouse/lever/ashby),
@@ -489,10 +489,10 @@ async def _live_local_fetch(profile: ProfileAnalysis, metro: str) -> list[dict]:
             await asyncio.wait_for(_do(), timeout=_LIVE_LOCAL_BUDGET)
     except (asyncio.TimeoutError, Exception) as e:
         print(f"[serve] live-local fetch for metro={metro!r} failed/timeout: {e}")
-    add_rotation_metro(metro, "serving")   # promote regardless — worker backfills next run
+    await asyncio.to_thread(add_rotation_metro, metro, "serving")   # promote regardless — worker backfills next run
     # Return the freshly-persisted rows (parsed+embedded where the inline parse succeeded) so
     # rank+build use the precompute THIS request; unparsed survivors fall back gracefully.
-    rows = get_listings(metro, "local", max_age=_SERVE_MAX_AGE)
+    rows = await asyncio.to_thread(get_listings, metro, "local", max_age=_SERVE_MAX_AGE)
     print(f"[serve] metro={metro!r} NOT in rotation — live-fetched, serving {len(rows)} local rows, promoted")
     return rows
 
@@ -517,13 +517,14 @@ async def search_internships(profile: ProfileAnalysis) -> InternshipBuckets:
     metro = _parse_metro(profile.location)
 
     # ── 1. Read the index (national pools are metro-independent; reach is its own pool)
-    nat_startup = _serve_national_rows(NATIONAL_NICHE_KEY, "startup")
-    nat_bigtech = _serve_national_rows(NATIONAL_NICHE_KEY, "big_tech")
-    reach_rows  = _serve_national_rows(REACH_NICHE_KEY,    "reach")
+    # _serve_national_rows does blocking get_listings reads — run each off the event loop.
+    nat_startup = await asyncio.to_thread(_serve_national_rows, NATIONAL_NICHE_KEY, "startup")
+    nat_bigtech = await asyncio.to_thread(_serve_national_rows, NATIONAL_NICHE_KEY, "big_tech")
+    reach_rows  = await asyncio.to_thread(_serve_national_rows, REACH_NICHE_KEY,    "reach")
 
     local_rows: list[dict] = []
-    if metro in get_rotation_metros():
-        local_rows = get_listings(metro, "local", max_age=_SERVE_MAX_AGE)
+    if metro in await asyncio.to_thread(get_rotation_metros):
+        local_rows = await asyncio.to_thread(get_listings, metro, "local", max_age=_SERVE_MAX_AGE)
         print(f"[serve] metro={metro!r} in rotation — local from index ({len(local_rows)} rows)")
     # Fall back to a live fetch when the metro is NOT in rotation OR is seeded-but-not-yet-
     # ingested (empty/stale index) — so seeding a metro can never serve an empty local bucket.
@@ -588,7 +589,7 @@ async def _annotate_one(
     and caches the result. A missing row → error; a model decline/error → ok with empty fit (card
     just keeps its blank 'why you fit' rather than spinning forever)."""
     try:
-        row = get_listing_by_url(url)
+        row = await asyncio.to_thread(get_listing_by_url, url)
         if not row:
             return AnnotateEnvelope(
                 index=i, status="error",
@@ -596,7 +597,7 @@ async def _annotate_one(
             )
         # Key on the listing's content_hash (a re-parse → new hash → fresh reasoning), else url.
         key = annotate_cache_key(profile_json, bucket, row.get("content_hash") or url)
-        cached = get_annotate_cache(key)
+        cached = await asyncio.to_thread(get_annotate_cache, key)
         if cached is not None:
             record_cache_hit("annotate", MODEL_MID)
             return AnnotateEnvelope(
@@ -610,7 +611,7 @@ async def _annotate_one(
         async with sonnet_sem:
             out = await asyncio.to_thread(_annotate_fit_sync, profile, fields, bucket, city)
         if out:  # cache only a real, non-empty result — declines/errors re-attempt next time
-            set_annotate_cache(key, out)
+            await asyncio.to_thread(set_annotate_cache, key, out)
         return AnnotateEnvelope(
             index=i, status="ok",
             fit_explanation=(out or {}).get("fit_explanation") or "",

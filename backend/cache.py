@@ -1,208 +1,19 @@
 import hashlib
 import json
 import re
-import sqlite3
 import time
-from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "pathfinder_cache.db"
+# The connection pool + get_db()/init_db() live in db.py now (Postgres, not sqlite).
+# Re-exported here so every existing `from cache import get_db / init_db` keeps working
+# (main.py startup, worker/ingest.py). Schema is owned by Alembic — init_db() only warms
+# the pool; it no longer creates tables/indexes/seeds.
+from db import get_db, init_db  # noqa: F401  (re-exported)
 
 SEVEN_DAYS = 7 * 24 * 3600
 ONE_DAY = 24 * 3600
 THIRTY_DAYS = 30 * 24 * 3600
 
 _WS_RE = re.compile(r"\s+")
-
-
-def get_db() -> sqlite3.Connection:
-    # timeout + busy_timeout let a momentary write lock wait rather than raising
-    # "database is locked" — needed because the standalone ingestion worker
-    # (worker/ingest.py) writes listing_store in a separate process while uvicorn reads.
-    conn = sqlite3.connect(DB_PATH, timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=15000;")
-    return conn
-
-
-def init_db() -> None:
-    with get_db() as conn:
-        # WAL is a persistent property of the DB file (set once) — it lets the worker
-        # process write while API requests read the same file without blocking.
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS profile_cache (
-                linkedin_url TEXT PRIMARY KEY,
-                data         TEXT NOT NULL,
-                created_at   INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS people_search_cache (
-                filter_hash  TEXT PRIMARY KEY,
-                data         TEXT NOT NULL,
-                created_at   INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS jobs_search_cache (
-                filter_hash  TEXT PRIMARY KEY,
-                data         TEXT NOT NULL,
-                created_at   INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS run_cache (
-                url          TEXT PRIMARY KEY,
-                data         TEXT NOT NULL,
-                created_at   INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS url_validation_cache (
-                url        TEXT PRIMARY KEY,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS enrichment_cache (
-                url        TEXT PRIMARY KEY,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS analysis_cache (
-                cache_key  TEXT PRIMARY KEY,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS requirements_cache (
-                job_hash   TEXT PRIMARY KEY,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS job_fetch_cache (
-                url_hash   TEXT PRIMARY KEY,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS user_analysis_cache (
-                cache_key  TEXT PRIMARY KEY,
-                mode       TEXT NOT NULL,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_user_analysis_mode
-                ON user_analysis_cache(mode);
-            CREATE TABLE IF NOT EXISTS url_liveness_cache (
-                url        TEXT PRIMARY KEY,
-                alive      INTEGER NOT NULL,
-                checked_at INTEGER NOT NULL
-            );
-            -- Per-(profile, role) "why you fit" reasoning from /internships/annotate.
-            -- cache_key = profile_hash : bucket : (listing content_hash, else url) — see
-            -- annotate_cache_key. 30-day TTL via _get. The served feed stays zero-LLM; this
-            -- just spares the deferred Sonnet call on repeat (cross-device / same-profile) views.
-            CREATE TABLE IF NOT EXISTS annotate_cache (
-                cache_key  TEXT PRIMARY KEY,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            -- Append-only ledger of Claude spend + cache savings (written by lib/cost.py).
-            -- kind='call' rows carry real tokens/usd; kind='hit' rows carry est_saved_usd for
-            -- a full-call cache avoidance (usd=0). Read by GET /cost/summary.
-            CREATE TABLE IF NOT EXISTS cost_events (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at         INTEGER NOT NULL,
-                kind               TEXT NOT NULL,        -- 'call' | 'hit'
-                session            TEXT,
-                label              TEXT,
-                model              TEXT,
-                input_tokens       INTEGER NOT NULL DEFAULT 0,
-                output_tokens      INTEGER NOT NULL DEFAULT 0,
-                cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
-                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-                usd                REAL NOT NULL DEFAULT 0,
-                est_saved_usd      REAL NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_cost_events_created
-                ON cost_events(created_at);
-            -- Tiny persistent key/value flags for runtime app state (e.g. the manual
-            -- kill switch, key='kill_switch' value='on'|'off'). Survives restarts so an
-            -- emergency halt stays in effect; read by lib/guard.py, written by /admin.
-            CREATE TABLE IF NOT EXISTS app_flags (
-                key        TEXT PRIMARY KEY,
-                value      TEXT NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            -- Pre-ingested job listings, populated by the background worker
-            -- (worker/ingest.py). Unlike every other table here (one JSON blob per
-            -- key), this is a QUERYABLE COLLECTION the serving layer filters by
-            -- niche/bucket/freshness. Holds the PRE-ANNOTATION listing — fit_explanation
-            -- is per-user and generated at request time, never stored.
-            CREATE TABLE IF NOT EXISTS listing_store (
-                url                TEXT NOT NULL,
-                bucket             TEXT NOT NULL,      -- startup|big_tech|local|reach
-                niche_key          TEXT NOT NULL,      -- Niche.key, or '_reach' pool
-                company            TEXT,
-                search_title       TEXT,
-                snippet            TEXT,
-                verified_location  TEXT,
-                is_category_page   INTEGER NOT NULL DEFAULT 0,
-                status             TEXT NOT NULL DEFAULT 'valid',  -- valid|dead
-                validation_reason  TEXT,
-                raw_json           TEXT,
-                first_seen         INTEGER NOT NULL,
-                last_seen          INTEGER NOT NULL,
-                last_validated     INTEGER NOT NULL,
-                -- Precompute columns (worker/ingest.py parse pass; see set_listing_parse).
-                -- All NULL until parsed. parsed_at IS NULL is the single "needs work"
-                -- sentinel; upsert NULLs it back when the listing's content changes.
-                parsed_json        TEXT,     -- {title,company,company_description,location,
-                                             --  skills[],seniority,role_category,
-                                             --  is_internship,sponsorship}
-                embedding          BLOB,     -- normalized float32 vector (np.tobytes)
-                embedding_model    TEXT,     -- model id the vector was produced with
-                embedding_dim      INTEGER,  -- authoritative vector length
-                content_hash       TEXT,     -- hash of the embed text the parse was keyed on
-                parsed_at          INTEGER,  -- when parse+embed last ran (NULL = unparsed)
-                -- Composite key: the SAME url legitimately belongs to multiple contexts
-                -- (Stripe's listing is big_tech for every CS niche AND in the _reach pool).
-                -- Keying on url alone would let later niches clobber earlier ones.
-                PRIMARY KEY (niche_key, bucket, url)
-            );
-            CREATE INDEX IF NOT EXISTS idx_listing_niche_bucket
-                ON listing_store(niche_key, bucket);
-            CREATE INDEX IF NOT EXISTS idx_listing_bucket
-                ON listing_store(bucket);
-            CREATE INDEX IF NOT EXISTS idx_listing_freshness
-                ON listing_store(last_validated);
-            CREATE INDEX IF NOT EXISTS idx_listing_status
-                ON listing_store(status);
-            -- Which metros the worker refreshes `local` for, and which serve local from
-            -- the index. Seeded with SEED_METROS; serving promotes uncovered metros here
-            -- on first request. `metro` is the canonical _parse_metro output.
-            CREATE TABLE IF NOT EXISTS metro_rotation (
-                metro     TEXT PRIMARY KEY,
-                added_at  INTEGER NOT NULL,
-                source    TEXT NOT NULL        -- 'seed' | 'serving'
-            );
-        """)
-        # Additive migration for DBs created before the precompute columns existed —
-        # CREATE TABLE IF NOT EXISTS won't ALTER an existing table. ADD COLUMN with no
-        # default is instant; existing rows get NULL (= unparsed), so the worker's next
-        # parse pass backfills them. Idempotent: skips columns already present.
-        existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(listing_store)")}
-        for col, decl in (
-            ("parsed_json", "TEXT"), ("embedding", "BLOB"), ("embedding_model", "TEXT"),
-            ("embedding_dim", "INTEGER"), ("content_hash", "TEXT"), ("parsed_at", "INTEGER"),
-        ):
-            if col not in existing_cols:
-                conn.execute(f"ALTER TABLE listing_store ADD COLUMN {col} {decl}")
-        # Created AFTER the migration: it references parsed_at, which the ALTER loop above
-        # adds to pre-existing tables (the inline CREATE TABLE only has it for fresh DBs).
-        # Cheap scan for the worker's parse pass (status='valid' AND parsed_at IS NULL).
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_listing_unparsed "
-            "ON listing_store(status, parsed_at)"
-        )
-
-        # Seed the rotation (idempotent — INSERT OR IGNORE keeps existing rows).
-        from config.niches import SEED_METROS
-        now = int(time.time())
-        conn.executemany(
-            "INSERT OR IGNORE INTO metro_rotation (metro, added_at, source) VALUES (?, ?, 'seed')",
-            [(m, now) for m in SEED_METROS],
-        )
 
 
 def hash_filters(filters: dict) -> str:
@@ -247,9 +58,11 @@ def annotate_cache_key(profile_json: str, bucket: str, sig: str) -> str:
 
 
 def _get(table: str, key_col: str, key_val: str, ttl: int | None) -> dict | list | None:
+    # {table}/{key_col} are trusted internal constants (never user input); values are
+    # always parameterized via %s.
     with get_db() as conn:
         row = conn.execute(
-            f"SELECT data, created_at FROM {table} WHERE {key_col} = ?", (key_val,)
+            f"SELECT data, created_at FROM {table} WHERE {key_col} = %s", (key_val,)
         ).fetchone()
     if row is None:
         return None
@@ -261,7 +74,9 @@ def _get(table: str, key_col: str, key_val: str, ttl: int | None) -> dict | list
 def _set(table: str, key_col: str, key_val: str, data: dict | list) -> None:
     with get_db() as conn:
         conn.execute(
-            f"INSERT OR REPLACE INTO {table} ({key_col}, data, created_at) VALUES (?, ?, ?)",
+            f"INSERT INTO {table} ({key_col}, data, created_at) VALUES (%s, %s, %s) "
+            f"ON CONFLICT ({key_col}) DO UPDATE SET "
+            f"data = EXCLUDED.data, created_at = EXCLUDED.created_at",
             (key_val, json.dumps(data), int(time.time())),
         )
 
@@ -376,8 +191,10 @@ def set_user_analysis_cache(cache_key: str, mode: str, data: dict) -> None:
     """Writes the mode column (used for selective wipes)."""
     with get_db() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO user_analysis_cache "
-            "(cache_key, mode, data, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO user_analysis_cache (cache_key, mode, data, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (cache_key) DO UPDATE SET "
+            "mode = EXCLUDED.mode, data = EXCLUDED.data, created_at = EXCLUDED.created_at",
             (cache_key, mode, json.dumps(data), int(time.time())),
         )
 
@@ -405,11 +222,12 @@ def insert_cost_event(
     cache_read_tokens: int = 0, cache_write_tokens: int = 0,
     usd: float = 0.0, est_saved_usd: float = 0.0,
 ) -> None:
+    # id is supplied by the IDENTITY column — omitted from the INSERT, as before.
     with get_db() as conn:
         conn.execute(
             "INSERT INTO cost_events (created_at, kind, session, label, model, "
             "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, usd, est_saved_usd) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (int(time.time()), kind, session, label, model, input_tokens, output_tokens,
              cache_read_tokens, cache_write_tokens, usd, est_saved_usd),
         )
@@ -418,7 +236,7 @@ def insert_cost_event(
 def query_cost_events(since: int) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM cost_events WHERE created_at >= ? ORDER BY created_at", (since,)
+            "SELECT * FROM cost_events WHERE created_at >= %s ORDER BY created_at", (since,)
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -429,7 +247,7 @@ def sum_spend_since(since: int) -> float:
     with get_db() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(usd), 0.0) AS total FROM cost_events "
-            "WHERE kind = 'call' AND created_at >= ?",
+            "WHERE kind = 'call' AND created_at >= %s",
             (since,),
         ).fetchone()
     return float(row["total"]) if row else 0.0
@@ -439,15 +257,15 @@ def sum_spend_since(since: int) -> float:
 
 def get_flag(key: str) -> str | None:
     with get_db() as conn:
-        row = conn.execute("SELECT value FROM app_flags WHERE key = ?", (key,)).fetchone()
+        row = conn.execute("SELECT value FROM app_flags WHERE key = %s", (key,)).fetchone()
     return row["value"] if row else None
 
 
 def set_flag(key: str, value: str) -> None:
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO app_flags (key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            "INSERT INTO app_flags (key, value, updated_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at",
             (key, value, int(time.time())),
         )
 
@@ -458,7 +276,7 @@ def get_url_liveness(url: str) -> bool | None:
     """Returns True/False if cached and fresh, None on miss/expiry."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT alive, checked_at FROM url_liveness_cache WHERE url = ?", (url,)
+            "SELECT alive, checked_at FROM url_liveness_cache WHERE url = %s", (url,)
         ).fetchone()
     if row is None:
         return None
@@ -470,15 +288,24 @@ def get_url_liveness(url: str) -> bool | None:
 def set_url_liveness(url: str, alive: bool) -> None:
     with get_db() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO url_liveness_cache "
-            "(url, alive, checked_at) VALUES (?, ?, ?)",
+            "INSERT INTO url_liveness_cache (url, alive, checked_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT (url) DO UPDATE SET alive = EXCLUDED.alive, checked_at = EXCLUDED.checked_at",
             (url, 1 if alive else 0, int(time.time())),
         )
 
 
 # --- Listing store (background-ingested job listings) ----------------------
 # A queryable collection, not the one-blob-per-key pattern above. Written by
-# worker/ingest.py; read by the serving layer (next step).
+# worker/ingest.py; read by the serving layer.
+
+def _row_with_bytes_embedding(d: dict) -> dict:
+    """psycopg3 returns BYTEA as `bytes`, but normalize defensively (a future driver/
+    version could hand back a memoryview) so embeddings.from_bytes(np.frombuffer) is safe."""
+    emb = d.get("embedding")
+    if emb is not None and not isinstance(emb, bytes):
+        d["embedding"] = bytes(emb)
+    return d
+
 
 def upsert_listing(
     listing: dict,
@@ -502,8 +329,8 @@ def upsert_listing(
                 (url, bucket, niche_key, company, search_title, snippet,
                  verified_location, is_category_page, status, validation_reason,
                  raw_json, first_seen, last_seen, last_validated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(niche_key, bucket, url) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (niche_key, bucket, url) DO UPDATE SET
                 company           = excluded.company,
                 search_title      = excluded.search_title,
                 snippet           = excluded.snippet,
@@ -515,16 +342,16 @@ def upsert_listing(
                 last_seen         = excluded.last_seen,
                 last_validated    = excluded.last_validated,
                 -- Invalidate the precompute when the content the parse/embed was keyed on
-                -- changes, so the worker re-parses. `IS NOT` (not `<>`, which yields NULL
-                -- when either side is NULL and would silently never fire) compares safely
-                -- across NULLs. parsed_json/embedding/etc. are intentionally NOT touched
-                -- here — they're stale but harmless; serving guards on parsed_at/model and
-                -- the parse pass overwrites them on the next run.
+                -- changes, so the worker re-parses. `IS DISTINCT FROM` (not `<>`, which
+                -- yields NULL when either side is NULL and would silently never fire)
+                -- compares safely across NULLs. parsed_json/embedding/etc. are
+                -- intentionally NOT touched here — they're stale but harmless; serving
+                -- guards on parsed_at/model and the parse pass overwrites them next run.
                 parsed_at = CASE
-                    WHEN listing_store.search_title      IS NOT excluded.search_title
-                      OR listing_store.snippet           IS NOT excluded.snippet
-                      OR listing_store.verified_location IS NOT excluded.verified_location
-                      OR listing_store.company           IS NOT excluded.company
+                    WHEN listing_store.search_title      IS DISTINCT FROM excluded.search_title
+                      OR listing_store.snippet           IS DISTINCT FROM excluded.snippet
+                      OR listing_store.verified_location IS DISTINCT FROM excluded.verified_location
+                      OR listing_store.company           IS DISTINCT FROM excluded.company
                     THEN NULL ELSE listing_store.parsed_at END
             """,
             (
@@ -551,17 +378,17 @@ def get_listings(
     clauses: list[str] = []
     params: list = []
     if niche_key is not None:
-        clauses.append("niche_key = ?"); params.append(niche_key)
+        clauses.append("niche_key = %s"); params.append(niche_key)
     if bucket is not None:
-        clauses.append("bucket = ?"); params.append(bucket)
+        clauses.append("bucket = %s"); params.append(bucket)
     if only_valid:
         clauses.append("status = 'valid'")
     if max_age is not None:
-        clauses.append("last_validated >= ?"); params.append(int(time.time()) - max_age)
+        clauses.append("last_validated >= %s"); params.append(int(time.time()) - max_age)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     with get_db() as conn:
         rows = conn.execute(f"SELECT * FROM listing_store{where}", params).fetchall()
-    return [dict(r) for r in rows]
+    return [_row_with_bytes_embedding(dict(r)) for r in rows]
 
 
 def get_listing_by_url(url: str) -> dict | None:
@@ -573,11 +400,11 @@ def get_listing_by_url(url: str) -> dict | None:
     the trusted display fields the slim annotate uses) and fall back to whatever exists."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM listing_store WHERE url = ? "
+            "SELECT * FROM listing_store WHERE url = %s "
             "ORDER BY (status='valid') DESC, (parsed_json IS NOT NULL) DESC LIMIT 1",
             (url,),
         ).fetchone()
-    return dict(row) if row else None
+    return _row_with_bytes_embedding(dict(row)) if row else None
 
 
 def get_listings_to_parse(limit: int | None = None) -> list[dict]:
@@ -587,7 +414,7 @@ def get_listings_to_parse(limit: int | None = None) -> list[dict]:
     sql = "SELECT * FROM listing_store WHERE status='valid' AND parsed_at IS NULL"
     params: list = []
     if limit is not None:
-        sql += " LIMIT ?"; params.append(limit)
+        sql += " LIMIT %s"; params.append(limit)
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
@@ -603,7 +430,7 @@ def get_listings_to_embed(limit: int | None = None) -> list[dict]:
            "AND parsed_at IS NOT NULL AND embedding IS NULL")
     params: list = []
     if limit is not None:
-        sql += " LIMIT ?"; params.append(limit)
+        sql += " LIMIT %s"; params.append(limit)
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
@@ -617,8 +444,8 @@ def set_listing_embedding(
     parsed_at / content_hash. Used by the embed backfill pass."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE listing_store SET embedding=?, embedding_model=?, embedding_dim=? "
-            "WHERE niche_key=? AND bucket=? AND url=?",
+            "UPDATE listing_store SET embedding=%s, embedding_model=%s, embedding_dim=%s "
+            "WHERE niche_key=%s AND bucket=%s AND url=%s",
             (embedding_bytes, model, dim, niche_key, bucket, url),
         )
 
@@ -640,9 +467,9 @@ def set_listing_parse(
     NULL can be re-embedded by a separate pass without re-parsing — see plan follow-up.)"""
     with get_db() as conn:
         conn.execute(
-            "UPDATE listing_store SET parsed_json=?, embedding=?, embedding_model=?, "
-            "embedding_dim=?, content_hash=?, parsed_at=? "
-            "WHERE niche_key=? AND bucket=? AND url=?",
+            "UPDATE listing_store SET parsed_json=%s, embedding=%s, embedding_model=%s, "
+            "embedding_dim=%s, content_hash=%s, parsed_at=%s "
+            "WHERE niche_key=%s AND bucket=%s AND url=%s",
             (parsed_json, embedding_bytes, model, dim, content_hash, int(time.time()),
              niche_key, bucket, url),
         )
@@ -655,8 +482,8 @@ def mark_listing_dead(url: str, reason: str) -> None:
     now = int(time.time())
     with get_db() as conn:
         conn.execute(
-            "UPDATE listing_store SET status='dead', validation_reason=?, "
-            "last_seen=?, last_validated=? WHERE url=?",
+            "UPDATE listing_store SET status='dead', validation_reason=%s, "
+            "last_seen=%s, last_validated=%s WHERE url=%s",
             (reason, now, now, url),
         )
 
@@ -666,7 +493,7 @@ def prune_stale_listings(max_age: int) -> int:
     the number deleted. The hard GC for listings that fell off all search results."""
     cutoff = int(time.time()) - max_age
     with get_db() as conn:
-        cur = conn.execute("DELETE FROM listing_store WHERE last_seen < ?", (cutoff,))
+        cur = conn.execute("DELETE FROM listing_store WHERE last_seen < %s", (cutoff,))
         return cur.rowcount
 
 
@@ -693,10 +520,11 @@ def get_rotation_metros() -> list[str]:
 
 
 def add_rotation_metro(metro: str, source: str = "serving") -> None:
-    """Promote a metro into the rotation. Idempotent (INSERT OR IGNORE), so concurrent
+    """Promote a metro into the rotation. Idempotent (ON CONFLICT DO NOTHING), so concurrent
     first-hits for the same new metro are race-safe."""
     with get_db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO metro_rotation (metro, added_at, source) VALUES (?, ?, ?)",
+            "INSERT INTO metro_rotation (metro, added_at, source) VALUES (%s, %s, %s) "
+            "ON CONFLICT (metro) DO NOTHING",
             (metro, int(time.time()), source),
         )

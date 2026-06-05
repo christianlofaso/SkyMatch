@@ -565,7 +565,7 @@ async def extract_requirements(job_text: str) -> tuple[JobSummary, list[_Require
     """Cached Step A. Both quick and full modes call this so the second run on
     the same job (regardless of user) skips the Opus call."""
     jh = job_text_hash(job_text)
-    hit = get_requirements_cache(jh)
+    hit = await asyncio.to_thread(get_requirements_cache, jh)
     if hit:
         print(f"[analyze] requirements_cache=hit job={jh[:8]}")
         summary = JobSummary(**hit["job_summary"])
@@ -576,7 +576,7 @@ async def extract_requirements(job_text: str) -> tuple[JobSummary, list[_Require
     # sonnet_sem: process-wide Sonnet concurrency cap (see lib/anthropic_client.py).
     async with sonnet_sem:
         summary, requirements = await asyncio.to_thread(_run_extraction, job_text)
-    set_requirements_cache(jh, {
+    await asyncio.to_thread(set_requirements_cache, jh, {
         "job_summary": summary.model_dump(),
         "requirements": [r.model_dump() for r in requirements],
     })
@@ -1007,7 +1007,7 @@ async def _resolve_job(
 
         # Per-URL fetch cache: the scrape (esp. Firecrawl JS render) is the expensive,
         # profile-independent part — reuse it so a 2nd analysis of the same URL skips it.
-        cached_fetch = get_job_fetch_cache(job_url)
+        cached_fetch = await asyncio.to_thread(get_job_fetch_cache, job_url)
         if cached_fetch:
             print(f"[analyze] job_fetch_cache=hit url={job_url[:60]}")
             fr = _FetchResult(
@@ -1026,14 +1026,14 @@ async def _resolve_job(
                 # degrades to a coarser-but-real score instead of a dead "retry".
                 # Not cached (don't block a future good fetch); job_id stays URL-based
                 # so the per-user analysis cache key is unchanged.
-                row = get_listing_by_url(job_url)
+                row = await asyncio.to_thread(get_listing_by_url, job_url)
                 fallback = _job_text_from_listing(row) if row else None
                 if fallback is None:
                     raise  # arbitrary URL / nothing usable → preserve today's error
                 print(f"[analyze] fetch path=listing_fallback url={job_url[:60]}")
                 text = fallback[:8000]
                 return text, None, _compute_job_id(job_url, text)
-            set_job_fetch_cache(job_url, {
+            await asyncio.to_thread(set_job_fetch_cache, job_url, {
                 "text": fr.text, "posted_at": fr.posted_at,
                 "apply_url": fr.apply_url, "path": fr.path,
             })
@@ -1061,7 +1061,7 @@ async def _analyze_impl(req: AnalyzeRequest):
     # ── Per-user cache check (covers both modes) ──────────────────────────────
     profile_json = req.profile.model_dump_json()
     cache_key = analysis_cache_key(req.mode, profile_json, job_id)
-    cached = _get_user_analysis_cache(cache_key)
+    cached = await asyncio.to_thread(_get_user_analysis_cache, cache_key)
     if cached:
         print(f"[analyze] user_cache=hit mode={req.mode} key={cache_key[:24]}…")
         if req.mode == "quick":
@@ -1070,7 +1070,7 @@ async def _analyze_impl(req: AnalyzeRequest):
         # current quick cache so stale full entries (computed before the
         # headline-reconcile fix) self-heal on the next read.
         quick_key = analysis_cache_key("quick", profile_json, job_id)
-        quick_cached = _get_user_analysis_cache(quick_key)
+        quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
         if quick_cached:
             cur_fit  = cached.get("fit_score")
             cur_call = (cached.get("verdict") or {}).get("call")
@@ -1080,7 +1080,7 @@ async def _analyze_impl(req: AnalyzeRequest):
                 print(f"[analyze] self-healing stale full cache: {cur_fit}/{cur_call} -> {new_fit}/{new_call}")
                 cached["fit_score"] = new_fit
                 cached["verdict"]["call"] = new_call
-                set_user_analysis_cache(cache_key, "full", cached)
+                await asyncio.to_thread(set_user_analysis_cache, cache_key, "full", cached)
         else:
             print(f"[analyze] no quick cache for this job_id; full headline unreconciled")
         # Phase 3 backfill: older full-mode cache rows predate roadmap/project.
@@ -1132,7 +1132,7 @@ async def _analyze_impl(req: AnalyzeRequest):
                 apply_url=fetch_result.apply_url if fetch_result else None,
             ),
         )
-        set_user_analysis_cache(cache_key, "quick", quick.model_dump())
+        await asyncio.to_thread(set_user_analysis_cache, cache_key, "quick", quick.model_dump())
         print(f"[analyze] quick: fit={fit_score} verdict={verdict.call}")
         return quick
 
@@ -1162,7 +1162,7 @@ async def _analyze_impl(req: AnalyzeRequest):
     # evidence snippets, verdict.reasoning) — only the two visible numbers are
     # taken from the quick cache.
     quick_key = analysis_cache_key("quick", profile_json, job_id)
-    quick_cached = _get_user_analysis_cache(quick_key)
+    quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
     if quick_cached:
         fit_score = int(quick_cached["fit_score"])
         verdict_call = quick_cached["verdict"]["call"]
@@ -1210,7 +1210,7 @@ async def _analyze_impl(req: AnalyzeRequest):
         project_suggestion=project_suggestion,
     )
 
-    set_user_analysis_cache(cache_key, "full", result.model_dump())
+    await asyncio.to_thread(set_user_analysis_cache, cache_key, "full", result.model_dump())
     return result
 
 
@@ -1258,7 +1258,7 @@ async def _phase3_backfill_cached_row(
         patched["roadmap_note"] = roadmap_note
     if needs_project:
         patched["project_suggestion"] = project.model_dump() if project else None
-    set_user_analysis_cache(cache_key, "full", patched)
+    await asyncio.to_thread(set_user_analysis_cache, cache_key, "full", patched)
     print(
         f"[analyze] phase3 backfill: roadmap={'yes' if needs_roadmap else 'no'} "
         f"project={'yes' if needs_project else 'no'}"
@@ -1332,12 +1332,12 @@ async def _analyze_stream_prelude(req: AnalyzeRequest):
 
     profile_json = req.profile.model_dump_json()
     cache_key = analysis_cache_key("full", profile_json, job_id)
-    cached = _get_user_analysis_cache(cache_key)
+    cached = await asyncio.to_thread(_get_user_analysis_cache, cache_key)
     if cached:
         print(f"[analyze/stream] user_cache=hit key={cache_key[:24]}…")
         # Self-heal stale headline from the quick cache (same as _analyze_impl).
         quick_key = analysis_cache_key("quick", profile_json, job_id)
-        quick_cached = _get_user_analysis_cache(quick_key)
+        quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
         if quick_cached:
             cur_fit = cached.get("fit_score")
             cur_call = (cached.get("verdict") or {}).get("call")
@@ -1346,7 +1346,7 @@ async def _analyze_stream_prelude(req: AnalyzeRequest):
             if cur_fit != new_fit or cur_call != new_call:
                 cached["fit_score"] = new_fit
                 cached["verdict"]["call"] = new_call
-                set_user_analysis_cache(cache_key, "full", cached)
+                await asyncio.to_thread(set_user_analysis_cache, cache_key, "full", cached)
         cached = await _phase3_backfill_cached_row(cached, cache_key, req.profile, req.include)
         return ("cache_hit", AnalysisResponse(**cached))
     print(f"[analyze/stream] user_cache=miss key={cache_key[:24]}…")
@@ -1389,7 +1389,7 @@ async def _analyze_stream_prelude(req: AnalyzeRequest):
     # Reconcile the headline (fit_score + verdict.call) from the quick cache if one
     # exists, so the number the user saw on the results card doesn't shift here.
     quick_key = analysis_cache_key("quick", profile_json, job_id)
-    quick_cached = _get_user_analysis_cache(quick_key)
+    quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
     if quick_cached:
         fit_score = int(quick_cached["fit_score"])
         verdict_call = quick_cached["verdict"]["call"]
@@ -1535,7 +1535,7 @@ async def analyze_stream(req: AnalyzeRequest):
                 roadmap_note=roadmap_note,
                 project_suggestion=project,
             )
-            set_user_analysis_cache(cache_key, "full", result.model_dump())
+            await asyncio.to_thread(set_user_analysis_cache, cache_key, "full", result.model_dump())
             yield AnalyzeStreamEnvelope(phase="done").model_dump_json() + "\n"
 
     return StreamingResponse(
@@ -1570,7 +1570,7 @@ async def _quick_for_one(
 
     profile_json = profile.model_dump_json()
     cache_key = analysis_cache_key("quick", profile_json, job_id)
-    cached = _get_user_analysis_cache(cache_key)
+    cached = await asyncio.to_thread(_get_user_analysis_cache, cache_key)
     if cached:
         print(f"[batch] user_cache=hit key={cache_key[:24]}…")
         record_cache_hit("analysis:quick", MODEL_QUICK)  # repeat-search score served from SQLite
@@ -1592,7 +1592,7 @@ async def _quick_for_one(
             apply_url=fetch_result.apply_url if fetch_result else None,
         ),
     )
-    set_user_analysis_cache(cache_key, "quick", quick.model_dump())
+    await asyncio.to_thread(set_user_analysis_cache, cache_key, "quick", quick.model_dump())
     return quick
 
 
