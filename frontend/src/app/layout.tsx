@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Pathfinder",
-  description: "LinkedIn discovery: connections and internships tailored to you.",
+  description: "LinkedIn discovery: internships tailored to you.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

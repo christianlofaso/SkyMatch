@@ -1,774 +1,540 @@
 import asyncio
+import hashlib
 import json
 import re
-import urllib.parse
-import anthropic
-import httpx
-from fastapi import APIRouter, HTTPException
 
-from cache import get_url_validation_cache, set_url_validation_cache
-from schemas import Internship, InternshipBuckets, ProfileAnalysis
+import numpy as np
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+
+from cache import (
+    ONE_DAY, add_rotation_metro, get_listing_by_url, get_listings,
+    get_rotation_metros, upsert_listing,
+)
+from config.models import MODEL_MID
+from config.niches import NATIONAL_NICHE_KEY, REACH_NICHE_KEY
+from lib import embeddings
+from lib.anthropic_client import client as ai, sonnet_sem
+from lib.jsonparse import parse_json_with_context, strip_fences
+from lib.listing_parser import company_from_url
+from lib.precompute import parse_and_embed_rows
+from lib.timing import timed
+from schemas import (
+    AnnotateEnvelope, AnnotateError, AnnotateRequest,
+    Internship, InternshipBuckets, ProfileAnalysis,
+)
+# The local live-fetch fallback (uncovered metros) reuses the profile-independent
+# scrape/validate helpers from lib.ingest_core (the same ones the ingestion worker uses).
+from lib.ingest_core import _scrape_local_listings, _parse_metro, validate_job_url
 
 router = APIRouter()
-ai = anthropic.Anthropic()
-
-# Matches a numeric job ID (≥5 digits) or a UUID anywhere in a URL path
-_JOB_ID_RE = re.compile(
-    r"/(\d{5,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
-    re.IGNORECASE,
-)
-
-# Tokens to ignore when comparing expected vs ATS job titles
-_TRIVIAL_TITLE_TOKENS = {
-    "intern", "internship", "summer", "fall", "spring", "winter",
-    "2024", "2025", "2026", "remote", "hybrid", "us", "usa",
-    "the", "a", "an", "and", "or", "of", "for", "at", "in", "to",
-}
-
-# Companies known to use proprietary ATS — skip Greenhouse/Lever/Ashby lookup for these
-_PROPRIETARY_ATS = {
-    "google", "meta", "apple", "microsoft", "amazon", "netflix", "tesla",
-    # LinkedIn's own jobs live on linkedin.com (a BLOCKED_DOMAIN); skip ATS lookup
-    # so they fall through to no-URL rather than linking to the apply form.
-    "linkedin",
-}
-
-BIG_TECH_COMPANIES = [
-    "Google", "Meta", "Apple", "Microsoft", "Amazon", "Netflix",
-    "Salesforce", "Adobe", "Nvidia", "OpenAI", "Anthropic",
-    "Stripe", "Databricks", "Snowflake", "Palantir", "Tesla",
-]
-
-INTERNSHIPS_SYSTEM = """You are a career advisor who generates realistic, specific internship recommendations for a student based on their LinkedIn profile.
-
-Generate internship opportunities across 4 buckets. Each opportunity should be REAL or highly plausible — use actual companies that hire interns in this field.
-
-Buckets:
-- local: roles at companies headquartered or with offices within ~50 miles of the user's location. For Chicago-area students: Morningstar, CME Group, Citadel, Tempus, Outcome Health, Sprout Social, Relativity, etc.
-- big_tech: roles at well-known large tech companies (Google, Meta, Apple, Microsoft, Amazon, Stripe, Databricks, Snowflake, Palantir, Nvidia, OpenAI, Anthropic, Tesla, etc.)
-- startup: companies that are roughly Series C or earlier. If a startup is also a reach, classify it as reach instead.
-- reach: top-tier company AND the candidate has a significant credential gap given they are an early undergrad. Be specific about the gap.
-
-Rules:
-- fit_explanation: MUST reference specific fields from their profile (school, skills, orgs, major, past companies). Never generic.
-  BAD: "You're a great fit for this role."
-  GOOD: "Your CompE coursework at UIUC and your Phi Delta Theta leadership map well to Citadel's quantitative engineering team, which recruits heavily from Champaign."
-- reach_gap: specific and constructive.
-  BAD: "You're not qualified."
-  GOOD: "This role lists 1-2 prior SWE internships as preferred. Close the gap by shipping a personal project in Python or C++ and applying again sophomore year."
-- application_url: always set to null. URLs are sourced from real job boards separately.
-- company_description: one sentence, factual.
-- Max 10 per bucket. Aim for 8-10 per bucket. More candidates are better — many will be dropped during URL validation.
-- A single internship goes in exactly ONE bucket.
-
-Respond with ONLY valid JSON — no markdown fences, no commentary:
-
-{
-  "local": [...],
-  "big_tech": [...],
-  "startup": [...],
-  "reach": [...]
-}
-
-Each item:
-{
-  "title": "string",
-  "company": "string",
-  "location": "string",
-  "company_description": "string",
-  "fit_explanation": "string",
-  "application_url": "string or null",
-  "bucket": "local" | "big_tech" | "startup" | "reach",
-  "reach_gap": "string or null"
-}
-"""
+# The Anthropic client (shared, max_retries raised) AND the process-wide Sonnet concurrency
+# cap both live in lib/anthropic_client.py now. The per-role fan-out below grazes the org's
+# Sonnet input-tokens / requests-per-minute limits; sonnet_sem staggers the burst across 2-3
+# minutes and the SDK's Retry-After backoff recovers any residual 429 instead of dropping a role.
 
 
-_SKIP_STARTUP_ADDENDUM = (
-    '\n\nIMPORTANT: Do NOT generate any items for the "startup" bucket. '
-    'That bucket is sourced from real live listings. Return "startup": [] in your JSON.'
-)
-
-STARTUP_SYSTEM = """You are a career advisor matching real startup internship listings to a student's profile.
-
-You receive a student's ProfileAnalysis and a list of verified open listings from YC Work at a Startup and Wellfound (each has url, search_title, snippet).
-
-Select up to 10 listings that best fit this student and return ONE Internship object per listing.
-
-Rules:
-- application_url: copy the EXACT url from the listing verbatim. Do not modify it.
-- bucket: always "startup".
-- reach_gap: always null.
-- title: extract from search_title (the role title, not the company name).
-- company: extract from search_title or snippet.
-- location: extract from snippet if visible; otherwise "Remote / Various".
-- company_description: one factual sentence inferred from the snippet.
-- fit_explanation: MUST reference specific profile fields (school, skills, major, orgs, past companies). Be concrete.
-  BAD: "You're a great fit."
-  GOOD: "Your Python skills and UIUC CompE coursework map directly to this YC-backed startup's ML infrastructure work."
-- Skip listings where the snippet clearly indicates a full-time role or a closed/filled position.
-- If fewer than 10 strong matches exist, return fewer — do not pad with weak matches.
-
-Respond with ONLY a valid JSON array — no markdown, no commentary:
-
-[
-  {
-    "title": "string",
-    "company": "string",
-    "location": "string",
-    "company_description": "string",
-    "fit_explanation": "string",
-    "application_url": "string",
-    "bucket": "startup",
-    "reach_gap": null
-  }
-]
-"""
+def _profile_brief(profile: ProfileAnalysis) -> str:
+    """Compact profile text for per-call prompts. The full model_dump(indent=2) re-sent on
+    EVERY fan-out call multiplies input tokens ~Nx and blows the org's input-tokens-per-minute
+    limit; this keeps only the fields the selector/annotator actually use, as terse text."""
+    p = profile
+    parts = [
+        f"Name: {p.full_name}",
+        f"Headline: {p.headline}" if p.headline else "",
+        f"School: {p.school or '?'} | Major: {p.major or '?'} | Grad year: {p.graduation_year or '?'}",
+        f"Field of interest: {p.field_of_interest or '?'}",
+        f"Skills: {', '.join(p.technical_skills) if p.technical_skills else '?'}",
+        f"Orgs: {', '.join(p.fraternity_or_orgs) if p.fraternity_or_orgs else '?'}",
+        f"Past companies: {', '.join(p.past_companies) if p.past_companies else '?'}",
+        f"Current company: {p.current_company}" if p.current_company else "",
+    ]
+    return "\n".join(p for p in parts if p)
 
 
-# Job boards we accept as fallbacks (ordered by quality)
-TRUSTED_BOARDS = [
-    "greenhouse.io", "lever.co", "workday.com", "icims.com",
-    "myworkdayjobs.com", "taleo.net", "smartrecruiters.com",
-    "builtinchicago.org", "builtin.com",
-    "wellfound.com", "workatastartup.com",
-    "indeed.com", "ziprecruiter.com", "glassdoor.com",
-]
-
-# Domains we always skip
-BLOCKED_DOMAINS = ["linkedin.com", "facebook.com", "twitter.com", "instagram.com"]
-
-# Strings that indicate a job listing is no longer active
-CLOSED_STRINGS = [
-    # Original
-    "no longer available",
-    "this job has closed",
-    "position has been filled",
-    "no longer accepting applications",
-    "page not found",
-    "job not found",
-    "this position is no longer open",
-    # Additional ATS patterns
-    "this role is no longer",
-    "this position has been filled",
-    "applications are closed",
-    "this job is no longer",
-    "listing has expired",
-    "this posting has been removed",
-    "job posting has been removed",
-    "no longer accepting",
-    "role has been filled",
-    "this position is closed",
-    "posting is no longer active",
-    "sorry, this job",
-    "we've filled this role",
-    "this opportunity is no longer",
-]
+# ── Serving model ────────────────────────────────────────────────────────────
+# Serving a user's feed is now ZERO-LLM on the /run path:
+#   RANK (embed + cosine) → SELECT+BUILD (deterministic: hard filters already applied in
+#   rank, then company-diversity trim) → cards assembled straight from the precomputed
+#   display fields. No SELECT/ANNOTATE Sonnet calls block the feed.
+# The personalized "why you fit" text (fit_explanation / reach_gap) is deferred: the
+# results page fans the served URLs out to POST /internships/annotate, which streams the
+# per-role fit text back (the slim fit-only Sonnet call below) — same lazy pattern the
+# score badge uses via /analyze/batch.
 
 
-def _company_slug(company: str) -> str:
-    """Turn 'Morningstar' into 'morningstar' for domain matching."""
-    return re.sub(r"[^a-z0-9]", "", company.lower())
-
-
-def _to_slugs(company: str) -> list[str]:
-    """Generate ATS slug variations to try for a company name.
-
-    Examples:
-      "Sprout Social"      → ["sproutsocial", "sprout-social", "sprout"]
-      "Anduril Industries" → ["anduril", "anduril-industries"]
-      "Two Sigma"          → ["twosigma", "two-sigma", "two"]
-    """
-    base = company.lower()
-    for suffix in (" technologies", " tech", " systems", " industries",
-                   " solutions", " inc", " corp", " llc", " ltd", " group", " ai"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)].strip()
-
-    clean = re.sub(r"[^a-z0-9\s]", "", base).strip()
-    parts = clean.split()
-    slugs: list[str] = []
-    if parts:
-        slugs += ["".join(parts), "-".join(parts), parts[0]]
-
-    # Also try original without suffix removal (catches "openai", "palantir", etc.)
-    orig = re.sub(r"[^a-z0-9]", "", company.lower())
-    slugs.append(orig)
-
-    seen: set[str] = set()
-    return [s for s in slugs if s and not (s in seen or seen.add(s))]  # type: ignore[func-returns-value]
-
-
-def _best_intern_match(
-    jobs: list[dict], title_key: str, url_key: str, expected_title: str
-) -> str | None:
-    """Return the URL of the best-matching internship from an ATS job list.
-
-    Filters for roles with 'intern' in the title, scores by non-trivial token
-    overlap with the expected title. Returns None if no candidate has any
-    meaningful overlap (prevents linking a supply-chain job for 'Engineering Intern').
-    """
-    candidates = [j for j in jobs if "intern" in j.get(title_key, "").lower()]
-    if not candidates:
-        return None
-
-    exp_tokens = (
-        set(re.sub(r"[^\w\s]", " ", expected_title.lower()).split())
-        - _TRIVIAL_TITLE_TOKENS
-    )
-
-    def overlap(j: dict) -> int:
-        t = (
-            set(re.sub(r"[^\w\s]", " ", j.get(title_key, "").lower()).split())
-            - _TRIVIAL_TITLE_TOKENS
+def _annotate_fit_system(bucket: str, city: str | None = None) -> str:
+    """Slim system prompt for the deferred fit-only annotate: the listing's display fields
+    (title/company/location/description) are already known, so the call only writes the
+    per-user fit text (+reach_gap). The out-of-field/closed skip rule is kept as a per-user
+    backstop on top of the deterministic pre-filter applied at serve time."""
+    if bucket == "reach":
+        gap_rule = (
+            '- reach_gap: REQUIRED and non-null — ONE short sentence (~25 words) on the '
+            'credential gap and how to close it.\n'
+            '  BAD: "You are not qualified."  '
+            'GOOD: "This role prefers 1-2 prior SWE internships; close the gap by shipping a '
+            'Python/C++ project and reapplying sophomore year."'
         )
-        return len(exp_tokens & t)
+        skip_rule = (
+            'If this listing is clearly OUTSIDE the student\'s software / engineering / data / ML '
+            'field (e.g. finance, audit, sales, recruiting, marketing) OR is a full-time or '
+            'closed/filled position, respond with exactly: null'
+        )
+        bucket_intro = ('This is an aspirational REACH role — be concrete about what makes it a '
+                        'stretch-but-plausible target.')
+    else:
+        gap_rule = '- reach_gap: always null.'
+        skip_rule = (
+            'If this listing clearly indicates a full-time role or a closed/filled position, '
+            'respond with exactly: null'
+        )
+        bucket_intro = ''
+    near = (f' This role is already verified to be in or near {city}.'
+            if (bucket == "local" and city) else '')
 
-    best = max(candidates, key=overlap)
-    # If no meaningful token overlap, don't risk linking the wrong role
-    if exp_tokens and overlap(best) == 0:
-        return None
-    return best.get(url_key)
+    return f"""You are a career advisor writing ONE personalized internship recommendation for a student from ONE real, already-verified, pre-parsed open listing.
 
+{bucket_intro}
+{skip_rule}
 
-async def _find_via_ats(title: str, company: str) -> str | None:
-    """Try Greenhouse, Lever, Ashby public APIs for a real internship listing.
-
-    Returns the first specific listing URL found, or None if not on any of these platforms.
-    Skips companies known to use proprietary ATS systems.
-    """
-    if re.sub(r"[^a-z]", "", company.lower()) in _PROPRIETARY_ATS:
-        return None  # proprietary ATS — DuckDuckGo fallback will handle these
-
-    slugs = _to_slugs(company)
-    async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
-        for slug in slugs:
-            # Greenhouse
-            try:
-                r = await client.get(
-                    f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
-                )
-                if r.status_code == 200:
-                    url = _best_intern_match(
-                        r.json().get("jobs", []), "title", "absolute_url", title
-                    )
-                    if url:
-                        print(f"[ats] greenhouse slug={slug} url={url}")
-                        return url
-            except Exception:
-                pass
-
-            # Lever
-            try:
-                r = await client.get(
-                    f"https://api.lever.co/v0/postings/{slug}?mode=json"
-                )
-                if r.status_code == 200:
-                    url = _best_intern_match(
-                        r.json(), "text", "hostedUrl", title
-                    )
-                    if url:
-                        print(f"[ats] lever slug={slug} url={url}")
-                        return url
-            except Exception:
-                pass
-
-            # Ashby
-            try:
-                r = await client.get(
-                    f"https://api.ashbyhq.com/posting-api/job-board/{slug}"
-                )
-                if r.status_code == 200:
-                    url = _best_intern_match(
-                        r.json().get("jobPostings", []), "title", "jobUrl", title
-                    )
-                    if url:
-                        print(f"[ats] ashby slug={slug} url={url}")
-                        return url
-            except Exception:
-                pass
-
-    return None
+You are given the student profile and the listing's ALREADY-EXTRACTED fields (title, company, location, description, skills). Do NOT re-output those fields. Respond with ONLY a single JSON object (no array, no markdown, no commentary) with exactly these fields:
+- fit_explanation: AT MOST 2 short sentences (~30 words total). MUST name a specific profile detail (a skill, major, school, org, or past company) and connect it to this role. Concrete and scannable — not a paragraph.{near}
+{gap_rule}"""
 
 
-async def _find_via_startup_boards(title: str, company: str) -> str | None:
-    """Search YC Work at a Startup and Wellfound for a startup internship listing.
-
-    Both platforms embed numeric job IDs in listing URLs so results naturally
-    pass the _JOB_ID_RE check. We pre-filter here to avoid returning company
-    overview pages that lack an ID.
-    """
-    queries = [
-        f'"{company}" "{title}" site:workatastartup.com',
-        f'"{company}" intern site:workatastartup.com',
-        f'"{company}" "{title}" site:wellfound.com',
-        f'"{company}" intern site:wellfound.com',
-    ]
-    try:
-        from ddgs import DDGS
-        ddgs = DDGS()
-        for query in queries:
-            results = list(ddgs.text(query, max_results=5))
-            for r in results:
-                url = r.get("href", "")
-                parsed = urllib.parse.urlparse(url)
-                domain = parsed.netloc.lower()
-                if "workatastartup.com" in domain or "wellfound.com" in domain:
-                    if _JOB_ID_RE.search(parsed.path):
-                        print(f"[startup-boards] found url={url}")
-                        return url
-    except Exception:
-        pass
-    return None
+def _fit_fields(listing: dict) -> dict:
+    """The listing fields the slim fit-only annotate prompt reads. Prefers the trusted
+    ingestion-time parse; for an unparsed row (warming index OR the local live-fetch fallback,
+    which upserts without parsing) it falls back to the raw scraped columns so the deferred
+    annotate still has something to reason over."""
+    parsed = listing.get("parsed")
+    if parsed:
+        return {k: parsed.get(k) for k in
+                ("title", "company", "location", "company_description", "skills", "seniority")}
+    title, company = _parse_title_company(listing.get("search_title"))
+    return {
+        "title": title,
+        "company": company or company_from_url(listing.get("url") or "") or listing.get("company"),
+        "location": listing.get("verified_location"),
+        "company_description": " ".join((listing.get("snippet") or "").split())[:200] or None,
+        "skills": None,
+        "seniority": None,
+    }
 
 
-async def _scrape_startup_listings(profile: ProfileAnalysis) -> list[dict]:
-    """Search YC Work at a Startup and Wellfound for real open intern listings.
+# Job-board search titles for unparsed (live-fetched) rows arrive in two shapes:
+#   "{Role} @ {Company} - Jobs"        (workatastartup / Built In)
+#   "{Role} - {Company} - {Board}"     (Lever/Greenhouse/Ashby DDG page titles)
+# Until the worker (or the inline live-fetch parse) parses the row, recover a clean title +
+# company deterministically so the card isn't a raw string with an "Unknown" company — and so
+# the company-diversity trim in _select_and_build doesn't collapse the whole bucket. The "@"
+# split is always safe; the " - Company" split is ONLY taken after stripping a known ATS board
+# suffix (so a title like "… Intern - Fall" doesn't mistake "Fall" for a company).
+_TITLE_BOARD_SUFFIXES = (" - Jobs", " | Jobs", " - jobs")
+_ATS_BOARD_SUFFIXES = (" - Lever", " - Greenhouse", " - Ashby")
 
-    Runs 6 DuckDuckGo site: queries concurrently (each in its own thread so
-    DDGS blocking I/O doesn't block the event loop). Returns up to 30 unique
-    listings whose URLs already contain a numeric job ID.
-    """
-    field = profile.field_of_interest
-    major = profile.major or field
-    skills = profile.technical_skills[:2]
-    skill_str = " ".join(f'"{s}"' for s in skills) if skills else f'"{field}"'
 
-    queries = [
-        f'intern "{field}" site:workatastartup.com',
-        f'intern "{major}" site:workatastartup.com',
-        f'intern {skill_str} site:workatastartup.com',
-        f'intern "{field}" site:wellfound.com/jobs',
-        f'intern "{major}" site:wellfound.com/jobs',
-        f'intern {skill_str} site:wellfound.com/jobs',
-    ]
-
-    def _run_query(q: str) -> list[dict]:
-        try:
-            from ddgs import DDGS
-            hits = list(DDGS().text(q, max_results=10))
-            results = []
-            for r in hits:
-                url = r.get("href", "")
-                parsed = urllib.parse.urlparse(url)
-                domain = parsed.netloc.lower()
-                if "workatastartup.com" not in domain and "wellfound.com" not in domain:
-                    continue
-                if not _JOB_ID_RE.search(parsed.path):
-                    continue
-                results.append({
-                    "url": url,
-                    "search_title": r.get("title", ""),
-                    "snippet": r.get("body", ""),
-                })
-            return results
-        except Exception:
-            return []
-
-    all_batches = await asyncio.gather(*[asyncio.to_thread(_run_query, q) for q in queries])
-
-    seen: set[str] = set()
-    listings: list[dict] = []
-    for batch in all_batches:
-        for item in batch:
-            url = item["url"].rstrip("/")
-            if url not in seen:
-                seen.add(url)
-                listings.append(item)
-            if len(listings) >= 30:
+def _parse_title_company(search_title: str | None) -> tuple[str, str | None]:
+    """(clean_title, company|None) parsed from a raw board search_title. Best-effort, zero-LLM;
+    a Haiku parse (worker or inline live-fetch) supersedes it once the row is parsed."""
+    s = (search_title or "").strip()
+    ats = False
+    for suf in _ATS_BOARD_SUFFIXES:
+        if s.lower().endswith(suf.lower()):
+            s = s[: -len(suf)].strip()
+            ats = True
+            break
+    else:
+        for suf in _TITLE_BOARD_SUFFIXES:
+            if s.lower().endswith(suf.lower()):
+                s = s[: -len(suf)].strip()
                 break
+    company: str | None = None
+    if " @ " in s:
+        s, company = s.rsplit(" @ ", 1)
+        s = s.strip()
+        company = company.strip() or None
+    elif ats and " - " in s:
+        # "{Role} - {Company}" left after stripping the board suffix.
+        s, company = s.rsplit(" - ", 1)
+        s = s.strip()
+        company = company.strip() or None
+    return (s or "Internship"), company
 
-    print(f"[startup-listings] found {len(listings)} real listings from YC/Wellfound")
-    return listings
 
-
-def _generate_startup_internships_sync(
-    profile: ProfileAnalysis,
-    listings: list[dict],
-) -> list[Internship]:
-    """Synchronous Claude call that maps real startup listings to Internship objects.
-
-    Called via asyncio.to_thread so it doesn't block the event loop.
-    Returns [] on any error so the startup bucket degrades gracefully.
-    """
+def _annotate_fit_sync(
+    profile: ProfileAnalysis, fields: dict, bucket: str, city: str | None = None,
+) -> dict | None:
+    """Slim fit-only Claude call for the DEFERRED annotate pass: given the listing's
+    already-known display fields, write just the per-user fit_explanation (+reach_gap for
+    reach). Returns {"fit_explanation", "reach_gap"} or None when the model declines / errors
+    (the card simply keeps its empty fit text). Called via asyncio.to_thread under sonnet_sem."""
     try:
         msg = ai.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=4096,
-            system=STARTUP_SYSTEM,
+            model=MODEL_MID,
+            max_tokens=160,  # just fit_explanation (+reach_gap); ~2x headroom
+            system=_annotate_fit_system(bucket, city),
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Student profile:\n{json.dumps(profile.model_dump(), indent=2)}\n\n"
-                    f"Open listings ({len(listings)} total):\n"
-                    f"{json.dumps(listings, indent=2)}"
+                    f"Student profile:\n{_profile_brief(profile)}\n\n"
+                    f"Listing fields:\n{json.dumps(fields)}"
                 ),
             }],
         )
-        raw = _strip_fences(msg.content[0].text)
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict):
-            parsed = parsed.get("internships") or parsed.get("startup") or []
-        if not isinstance(parsed, list):
-            return []
-        result = [Internship(**item) for item in parsed]
-        print(f"[startup-claude] generated {len(result)} startup internships from real listings")
-        return result
+        raw = strip_fences(msg.content[0].text)
+        if not raw.strip() or raw.strip().lower() == "null":
+            return None
+        out = parse_json_with_context(raw, f"annotate-fit:{bucket}")
+        if isinstance(out, list):
+            out = out[0] if out else None
+        if not isinstance(out, dict):
+            return None
+        fit = out.get("fit_explanation")
+        if not isinstance(fit, str) or not fit.strip():
+            return None
+        return {
+            "fit_explanation": fit.strip(),
+            "reach_gap": (out.get("reach_gap") if bucket == "reach" else None),
+        }
     except Exception as e:
-        print(f"[startup-claude] ERROR: {e}")
-        return []
-
-
-async def _get_url(title: str, company: str, bucket: str = "") -> str | None:
-    """URL lookup priority:
-    - startup bucket: YC/Wellfound → ATS APIs → DuckDuckGo
-    - all others:     ATS APIs → DuckDuckGo
-    """
-    if bucket == "startup":
-        url = await _find_via_startup_boards(title, company)
-        if url:
-            return url
-    url = await _find_via_ats(title, company)
-    if url:
-        return url
-    return await _find_job_url(title, company)
-
-
-async def _find_job_url(title: str, company: str) -> str | None:
-    """Search DuckDuckGo for a direct job listing on the company site or a trusted board."""
-    slug = _company_slug(company)
-
-    # Try two queries: one targeting the company's own site, one broader
-    queries = [
-        f'"{company}" "{title}" internship 2026 apply -site:linkedin.com',
-        f"{title} internship {company} 2026 careers apply",
-    ]
-
-    company_domain_hit = None
-    board_hit = None
-
-    try:
-        from ddgs import DDGS
-        ddgs = DDGS()
-        for query in queries:
-            results = list(ddgs.text(query, max_results=10))
-            for r in results:
-                url = r.get("href", "")
-                domain = urllib.parse.urlparse(url).netloc.lower()
-
-                # Skip blocked domains entirely
-                if any(b in domain for b in BLOCKED_DOMAINS):
-                    continue
-
-                # Best: company's own careers domain
-                if slug in domain and company_domain_hit is None:
-                    company_domain_hit = url
-
-                # Good: trusted job board
-                if board_hit is None and any(b in domain for b in TRUSTED_BOARDS):
-                    board_hit = url
-
-            # If we found the company's own site, stop searching
-            if company_domain_hit:
-                break
-
-    except Exception:
+        print(f"[annotate-fit:{bucket}] ERROR: {e}")
         return None
 
-    return company_domain_hit or board_hit or None
+
+def _build_internship(listing: dict, bucket: str) -> Internship:
+    """Assemble a feed card from a listing row with ZERO LLM. Display fields come from the
+    ingestion-time parse when present, else the raw scraped columns (warming index / local
+    live-fetch). fit_explanation is left empty — the results page fills it lazily via
+    /internships/annotate. application_url and bucket are forced from our trusted row."""
+    parsed = listing.get("parsed") or {}
+    # Unparsed rows (warming index / live-fetch) carry only the raw board search_title —
+    # recover a clean title + company from it; parsed rows use the trusted Haiku fields.
+    # Company resolution order: Haiku parse → title "@/-" company → URL slug (lever/greenhouse/
+    # ashby/amazon, via company_from_url) → stored column → "Unknown". The URL-slug step is the
+    # belt-and-suspenders that keeps an ATS-board URL from ever showing "Unknown" even with no
+    # Haiku key. (workatastartup has no slug → relies on the title "@" company instead.)
+    raw_title, raw_company = _parse_title_company(listing.get("search_title"))
+    title = parsed.get("title") or raw_title
+    company = (parsed.get("company") or raw_company
+               or company_from_url(listing.get("url") or "")
+               or listing.get("company") or "Unknown")
+    location = parsed.get("location") or listing.get("verified_location") or "Remote / Various"
+    desc = parsed.get("company_description")
+    if not desc:
+        desc = " ".join((listing.get("snippet") or "").split())[:160]
+    return Internship(
+        title=title,
+        company=company,
+        location=location,
+        company_description=desc or "",
+        fit_explanation="",  # deferred — see /internships/annotate
+        application_url=listing.get("url"),
+        bucket=bucket,
+        reach_gap=None,
+    )
 
 
-def _strip_fences(raw: str) -> str:
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return raw.strip()
+def _select_and_build(
+    rows: list[dict], bucket: str, *, per_bucket: int = 5, per_company: int = 2,
+) -> list[Internship]:
+    """Deterministic replacement for the old Sonnet SELECT + _cap: walk the cosine-ranked
+    rows in order, build each card, and keep the top `per_bucket` while enforcing
+    company-diversity (<= per_company per company — mirrors the dropped SELECT 'prefer
+    VARIETY' instruction) and dropping exact-duplicate (company, title) roles. No LLM."""
+    company_counts: dict[str, int] = {}
+    seen_roles: set[tuple[str, str]] = set()
+    out: list[Internship] = []
+    for row in rows:
+        item = _build_internship(row, bucket)
+        key = item.company.lower()
+        # Skip an exact repeat of the same role at the same company (same title posted under
+        # multiple URLs) — the per-company cap alone would otherwise show it twice.
+        role = (key, item.title.strip().lower())
+        if role in seen_roles:
+            continue
+        # Diversity cap, but NOT for unresolved companies: many distinct "Unknown" listings
+        # are different companies, so capping them at per_company would wrongly collapse the
+        # bucket (the live-fetch-unparsed case). Resolved companies still cap at per_company.
+        if key not in ("", "unknown") and company_counts.get(key, 0) >= per_company:
+            continue
+        company_counts[key] = company_counts.get(key, 0) + 1
+        seen_roles.add(role)
+        out.append(item)
+        if len(out) >= per_bucket:
+            break
+    return out
 
 
-# ---------------------------------------------------------------------------
-# DROP POLICY helpers
-# ---------------------------------------------------------------------------
-
-def _is_generic_url(url: str) -> tuple[bool, str]:
-    """Return (is_generic, reason). Uses urllib.parse — no regex on raw string."""
-    if not url:
-        return True, "empty_url"
-    try:
-        parsed = urllib.parse.urlparse(url)
-    except Exception:
-        return True, "unparseable_url"
-
-    host = parsed.netloc.lower()
-    if host.startswith("www."):
-        host = host[4:]
-    path = parsed.path.rstrip("/").lower() or "/"
-
-    # linkedin.com/company/*/jobs (no /view/ in path)
-    if "linkedin.com" in host:
-        if "/company/" in path and path.endswith("/jobs"):
-            return True, "linkedin_company_jobs_page"
-        if path in ("/", "/jobs"):
-            return True, "linkedin_root"
-
-    # amazon.jobs root (no /jobs/ subpath)
-    if host == "amazon.jobs" and "/jobs/" not in parsed.path:
-        return True, "amazon_jobs_root"
-
-    # careers.google.com root
-    if host == "careers.google.com" and path == "/":
-        return True, "google_careers_root"
-
-    # careers.{anything}.com root
-    if host.startswith("careers.") and path == "/":
-        return True, "careers_subdomain_root"
-
-    # boards.greenhouse.io/{company} with no /jobs/{id}
-    if "greenhouse.io" in host:
-        parts = [p for p in parsed.path.split("/") if p]
-        # Specific: /company/jobs/12345 → at least 3 non-empty parts, "jobs" present
-        if len(parts) < 3 or "jobs" not in parts:
-            return True, "greenhouse_board_no_listing"
-
-    # jobs.lever.co/{company} with no posting slug
-    if "lever.co" in host:
-        parts = [p for p in parsed.path.split("/") if p]
-        if len(parts) < 2:
-            return True, "lever_board_no_listing"
-
-    # Generic /careers page (path ends in /careers with nothing further)
-    if path == "/careers" or path.endswith("/careers"):
-        return True, "generic_careers_page"
-
-    # Generic /jobs page (path ends in /jobs with nothing further)
-    if path == "/jobs" or path.endswith("/jobs"):
-        return True, "generic_jobs_page"
-
-    # /job-search page
-    if path.endswith("/job-search"):
-        return True, "generic_job_search"
-
-    # Application-form pages — the listing is the parent URL, not /apply or /application.
-    # Lever: jobs.lever.co/{co}/{uuid}/apply
-    # Greenhouse: boards.greenhouse.io/{co}/jobs/{id}/application
-    path_parts_raw = [p for p in parsed.path.split("/") if p]
-    if path_parts_raw and path_parts_raw[-1].lower() in ("apply", "application", "applications"):
-        return True, "application_form_url"
-
-    # A real listing URL contains a numeric job ID (≥5 digits) or a UUID.
-    # University landing pages, emerging-talent hubs, and internship overview pages
-    # all have human-readable paths with no ID — drop them.
-    if not _JOB_ID_RE.search(parsed.path):
-        return True, "no_job_id_in_url"
-
-    return False, ""
+# ── Index-serving constants ────────────────────────────────────────────────
+# Don't serve listings the worker hasn't re-validated within this window (generous enough
+# to survive a missed ~6h worker cycle); otherwise a stale-but-unpruned row could surface.
+_SERVE_MAX_AGE = 3 * ONE_DAY
+# Bound the on-request local scrape for an uncovered metro so a slow/rate-limited DDG can't
+# hang /run; on timeout we serve an empty local bucket (the worker backfills next run).
+_LIVE_LOCAL_BUDGET = 35  # seconds
+# Embedding pre-rank: each bucket pool is cosine-ranked against the profile embedding and
+# narrowed to this many. _select_and_build then trims to the final per-bucket cap (5) with
+# company-diversity. Kept comfortably above 5 so the diversity trim has candidates to fill 5.
+_PRESELECT = 18
+# Off-field pre-filter: precomputed role_category values that are out-of-field for this
+# product's CS/eng audience (NATIONAL_FIELDS). Applied to BOTH reach and local — reach
+# (elite companies have plenty of these roles) and local (the live-fetch scrapes ATS boards
+# broadly for "intern <city>", so a CS student can get a Marketing/Sales intern). National
+# startup/big_tech pools are pre-curated by field, so they're unaffected. Mirrors the prose
+# exclusion in _annotate_fit_system (a backstop when Haiku's role_category is wrong). Keep in
+# sync with listing_parser.ROLE_CATEGORIES.
+_OFF_FIELD_CATEGORIES = {"finance", "sales", "marketing", "recruiting", "audit"}
+_OFF_FIELD_BUCKETS = {"reach", "local"}
+# Deterministic title backstop for the off-field gate — catches UNPARSED rows (a metro's
+# index still warming, before the worker's parse pass sets role_category) + parse misses,
+# exactly like _PHD_TITLE_RE does for the PhD gate. Without it, an unparsed Marketing/Sales
+# row in a warming local pool bypasses the role_category filter entirely and leaks through.
+# Word-boundaried so it won't false-positive on CS titles (e.g. "Salesforce Engineer" —
+# no boundary after "sales"; "Market Data" — not "marketing"). Keep the matched words in
+# sync with the intent of _OFF_FIELD_CATEGORIES.
+_OFF_FIELD_TITLE_RE = re.compile(
+    r"\b(?:marketing|sales|recruit\w*|audit\w*|financ\w*)\b", re.IGNORECASE,
+)
+# PhD-eligibility gate: this product serves UNDERGRAD interns, so a role that mandates PhD
+# enrollment is never applicable. Dropped in every bucket on the parsed `requires_phd` flag
+# OR a "PhD"/"Ph.D" title match (the deterministic backstop that catches unparsed rows + any
+# parse miss, e.g. "Software Engineering PhD Intern", "PhD Data Scientist").
+_PHD_TITLE_RE = re.compile(r"\bph\.?\s?d\b", re.IGNORECASE)
+# Per-process cache of profile-query embeddings (key includes EMBED_MODEL — a model swap
+# must not reuse a wrong-dim vector). Bounded by a coarse clear when it grows.
+_profile_vec_cache: dict[str, np.ndarray] = {}
 
 
-def _title_in_body(expected_title: str, body: str) -> bool:
-    """Return True if ≥70% of title tokens appear anywhere in the page body."""
-    def tokenize(s: str) -> list[str]:
-        return re.sub(r"[^\w\s]", " ", s.lower()).split()
+def _to_listings(rows: list[dict]) -> list[dict]:
+    """Map listing_store rows to the shape the serving pipeline consumes — the ingestion-time
+    precompute (parsed fields + embedding) used by the pre-filter, cosine rank, and card
+    builder, PLUS the raw scraped columns used as a fallback when a row is unparsed. Keeps
+    raw_json / timestamps / status out of memory."""
+    out: list[dict] = []
+    for r in rows:
+        parsed = None
+        if r.get("parsed_json"):
+            try:
+                parsed = json.loads(r["parsed_json"])
+            except (TypeError, ValueError):
+                parsed = None
+        emb = None
+        if r.get("embedding") is not None:
+            try:
+                emb = embeddings.from_bytes(r["embedding"])
+            except Exception:
+                emb = None
+        out.append({
+            "url": r["url"],
+            "search_title": r.get("search_title") or "",
+            "snippet": r.get("snippet") or "",
+            "verified_location": r.get("verified_location"),
+            "company": r.get("company"),
+            "parsed": parsed,
+            "embedding": emb,
+            "embedding_model": r.get("embedding_model"),
+            "embedding_dim": r.get("embedding_dim"),
+        })
+    return out
 
-    tokens = tokenize(expected_title)
-    if not tokens:
-        return True
-    body_lower = body.lower()
-    matched = sum(1 for t in tokens if t in body_lower)
-    return matched / len(tokens) >= 0.7
 
-
-async def validate_job_url(url: str | None, expected_title: str) -> tuple[bool, str]:
-    """
-    Full DROP POLICY check. Returns (is_valid, reason).
-    Results are cached for 24 hours in url_validation_cache.
-    Rules:
-      1. Missing/empty URL → drop
-      2. Generic URL pattern → drop (no HTTP call)
-      3. HTTP status ≥ 400 → drop
-      4. Final URL after redirects is generic → drop
-      5. Page body contains a closed-listing string → drop
-      6. Page body does not contain ≥70% of title tokens → drop
-    """
-    # Rule 1
-    if not url:
-        return False, "no_url"
-
-    # Cache hit
-    cached = get_url_validation_cache(url)
+async def _embed_profile(profile: ProfileAnalysis) -> np.ndarray | None:
+    """Embed the profile brief once per request (input_type='query'), cached per-process by
+    (EMBED_MODEL, brief). None when Voyage is unavailable or the call fails — callers then
+    skip cosine ranking and select from the unranked pool in DB order."""
+    if not embeddings.is_available():
+        return None
+    brief = _profile_brief(profile)
+    key = f"{embeddings.EMBED_MODEL}:{hashlib.sha256(brief.encode()).hexdigest()}"
+    cached = _profile_vec_cache.get(key)
     if cached is not None:
-        return bool(cached["is_valid"]), cached["reason"]
-
-    # Rule 2
-    is_generic, reason = _is_generic_url(url)
-    if is_generic:
-        set_url_validation_cache(url, False, reason)
-        return False, reason
-
-    # Rules 3 + 4: HEAD to check status and follow redirects cheaply
-    final_url = url
+        return cached
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
-            head_resp = await client.head(url)
-            final_url = str(head_resp.url)
+        vec = await asyncio.to_thread(embeddings.embed_query, brief)
+    except Exception as e:
+        print(f"[serve] profile embed failed: {e} — ranking disabled this request")
+        return None
+    if vec is not None:
+        if len(_profile_vec_cache) > 256:
+            _profile_vec_cache.clear()
+        _profile_vec_cache[key] = vec
+    return vec
 
-            if head_resp.status_code >= 400:
-                reason = f"http_{head_resp.status_code}"
-                set_url_validation_cache(url, False, reason)
-                return False, reason
 
-            if final_url != url:
-                is_gen_final, reason_final = _is_generic_url(final_url)
-                if is_gen_final:
-                    reason = f"redirect_to_{reason_final}"
-                    set_url_validation_cache(url, False, reason)
-                    return False, reason
-    except Exception:
-        set_url_validation_cache(url, False, "head_failed")
-        return False, "head_failed"
+def _prefilter_and_rank(
+    bucket: str, listings: list[dict], q_vec: np.ndarray | None,
+) -> list[dict]:
+    """Narrow a bucket pool for serving: drop precomputed-ineligible rows, then cosine-rank
+    embeddable rows against the profile and keep the top _PRESELECT (+ any rows that can't be
+    ranked, so a warming/partly-embedded index never loses candidates)."""
+    # 1. Deterministic pre-filter.
+    kept: list[dict] = []
+    for l in listings:
+        p = l.get("parsed")
+        # PhD-eligibility gate (ALL buckets, parsed or not): drop on the parsed requires_phd
+        # flag or a "PhD" title match — undergrad interns can't apply to PhD-mandatory roles.
+        title = (p.get("title") if p else None) or l.get("search_title") or ""
+        if (p and p.get("requires_phd") is True) or _PHD_TITLE_RE.search(title):
+            continue
+        if p and p.get("is_internship") is False:
+            continue
+        # Off-field gate (local/reach): parsed role_category is the precise primary; the
+        # title regex is the backstop for unparsed rows + parse misses (mirrors the PhD gate
+        # above), so a Marketing/Sales/etc. role never leaks while a metro's index is warming.
+        if bucket in _OFF_FIELD_BUCKETS and (
+            (p and p.get("role_category") in _OFF_FIELD_CATEGORIES)
+            or _OFF_FIELD_TITLE_RE.search(title)
+        ):
+            continue
+        kept.append(l)
 
-    # Rules 5 + 6: GET the final URL and scan the body
+    # 2. Cosine rank when we have a query vector; otherwise leave order unchanged.
+    if q_vec is None:
+        return kept
+    dim = len(q_vec)
+    rankable, unranked = [], []
+    for l in kept:
+        emb = l.get("embedding")
+        if (emb is not None and l.get("embedding_model") == embeddings.EMBED_MODEL
+                and l.get("embedding_dim") == dim):
+            rankable.append(l)
+        else:
+            unranked.append(l)
+    if rankable:
+        mat = np.stack([l["embedding"] for l in rankable])  # normalized rows
+        scores = mat @ q_vec                                 # cosine == dot (both unit)
+        order = np.argsort(-scores)[:_PRESELECT]
+        rankable = [rankable[i] for i in order]
+    # Ranked top-K first, then the unrankable remainder (_select_and_build trims the set).
+    return rankable + unranked
+
+
+def _safe_rank(bucket: str, listings: list[dict], q_vec: np.ndarray | None) -> list[dict]:
+    """_prefilter_and_rank guarded so a ranking/numpy error never 500s the request."""
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
-            get_resp = await client.get(final_url)
-            body = get_resp.text
-            body_lower = body.lower()
-
-            for s in CLOSED_STRINGS:
-                if s in body_lower:
-                    reason = f"closed: {s}"
-                    set_url_validation_cache(url, False, reason)
-                    return False, reason
-
-            if not _title_in_body(expected_title, body):
-                set_url_validation_cache(url, False, "title_not_found")
-                return False, "title_not_found"
-
-    except Exception:
-        set_url_validation_cache(url, False, "get_failed")
-        return False, "get_failed"
-
-    set_url_validation_cache(url, True, "pass")
-    return True, "pass"
+        return _prefilter_and_rank(bucket, listings, q_vec)
+    except Exception as e:
+        print(f"[serve] rank/prefilter failed for {bucket}: {e} — using unranked pool")
+        return listings
 
 
-async def _validate_with_sem(
-    sem: asyncio.Semaphore, internship: Internship, bucket: str
-) -> bool:
-    """Semaphore-wrapped validate_job_url with structured logging."""
-    async with sem:
-        is_valid, reason = await validate_job_url(
-            internship.application_url, internship.title
-        )
-        label = "PASS" if is_valid else "DROP"
-        print(
-            f"[validate] bucket={bucket} company={internship.company} "
-            f'title="{internship.title}" result={label} reason={reason} '
-            f"url={internship.application_url}"
-        )
-        return is_valid
+async def _live_local_fetch(profile: ProfileAnalysis, metro: str) -> list[dict]:
+    """Uncovered metro: scrape + validate the local bucket once, run the SAME parse precompute
+    the worker does (Haiku company/role_category + Voyage embedding) INLINE so this request
+    serves clean, field-filtered, ranked rows, cache it all, and promote the metro into the
+    rotation so the next user + next worker run get it from the index.
+
+    Why parse inline: the live-fetch is request-time mini-ingestion, and a row that's only
+    scraped (no parse) has no resolved company (→ "Unknown"), no role_category (→ off-field
+    Marketing roles slip through the local filter) and no embedding (→ no relevance ranking).
+    Parsing it here closes all three at the source. Bounded by _LIVE_LOCAL_BUDGET; on
+    timeout/error we still return whatever upserted (parsed or not — serving's fallback covers
+    unparsed rows), never []."""
+    async def _do() -> None:
+        scraped = await _scrape_local_listings(profile)   # enriches + metro-filters internally
+        sem = asyncio.Semaphore(10)
+
+        async def _check(listing: dict) -> tuple[dict, bool, str]:
+            async with sem:
+                ok, reason = await validate_job_url(listing.get("url"), listing.get("search_title", ""))
+            return listing, ok, reason
+
+        results = await asyncio.gather(*[_check(l) for l in scraped])
+        kept: list[dict] = []
+        for listing, ok, reason in results:
+            if ok:
+                upsert_listing(listing, bucket="local", niche_key=metro,
+                               status="valid", validation_reason=reason)
+                kept.append({**listing, "niche_key": metro, "bucket": "local"})
+        if kept:
+            # firecrawl_company=False: local hits only ATS boards (greenhouse/lever/ashby),
+            # where the URL slug / Haiku already resolve company — skip the render to stay
+            # inside the budget.
+            stats = await parse_and_embed_rows(kept, firecrawl_company=False)
+            print(f"[serve] live-local parse: {stats}")
+
+    try:
+        async with timed(f"internships/live-local:{metro}"):
+            await asyncio.wait_for(_do(), timeout=_LIVE_LOCAL_BUDGET)
+    except (asyncio.TimeoutError, Exception) as e:
+        print(f"[serve] live-local fetch for metro={metro!r} failed/timeout: {e}")
+    add_rotation_metro(metro, "serving")   # promote regardless — worker backfills next run
+    # Return the freshly-persisted rows (parsed+embedded where the inline parse succeeded) so
+    # rank+build use the precompute THIS request; unparsed survivors fall back gracefully.
+    rows = get_listings(metro, "local", max_age=_SERVE_MAX_AGE)
+    print(f"[serve] metro={metro!r} NOT in rotation — live-fetched, serving {len(rows)} local rows, promoted")
+    return rows
 
 
 async def search_internships(profile: ProfileAnalysis) -> InternshipBuckets:
-    """Generate personalized internship recommendations using Claude.
+    """Serve the internship feed from the pre-ingested index (worker/ingest.py) with ZERO LLM.
 
-    Startup bucket uses a search-first approach:
-      1. Scrape real listings from YC Work at a Startup + Wellfound via DDG
-      2. Separate Claude call annotates those real listings with fit explanations
-      3. URLs are already known — no URL-finding step for startup items
-    All other buckets use the original Claude-generates → URL-find → validate flow.
-    Both Claude calls run in parallel via asyncio.to_thread.
+    The three national buckets (startup, big_tech, reach) come from the metro-independent
+    pool and are served to everyone. local comes from the per-metro pool if the metro is in
+    rotation; otherwise it's live-fetched once (bounded), cached, and the metro is promoted.
+
+    URLs were found + validated at ingest and (in steady state) parsed + embedded there too,
+    so per-request work is now purely:
+      1. RANK (no LLM) — embed the profile once, drop precomputed-ineligible rows, and
+         cosine-rank each bucket to _PRESELECT candidates. Skipped per-bucket on any error;
+         skipped entirely when Voyage is unavailable (pools pass through unranked, DB order).
+      2. SELECT + BUILD (no LLM) — _select_and_build walks the ranked rows, enforces
+         company-diversity, and assembles up to 5 cards per bucket straight from the
+         precomputed display fields (raw-column fallback for unparsed rows).
+    The per-user "why you fit" text is filled lazily afterward via POST /internships/annotate.
     """
-    # ── 1. Scrape real startup listings concurrently (fast async DDG search)
-    startup_listings = await _scrape_startup_listings(profile)
+    metro = _parse_metro(profile.location)
 
-    # ── 2. Build main system prompt — tell Claude to skip startup if we have real ones
-    system_prompt = INTERNSHIPS_SYSTEM
-    if startup_listings:
-        system_prompt = INTERNSHIPS_SYSTEM + _SKIP_STARTUP_ADDENDUM
+    # ── 1. Read the index (national pools are metro-independent; reach is its own pool)
+    nat_startup = get_listings(NATIONAL_NICHE_KEY, "startup",  max_age=_SERVE_MAX_AGE)
+    nat_bigtech = get_listings(NATIONAL_NICHE_KEY, "big_tech", max_age=_SERVE_MAX_AGE)
+    reach_rows  = get_listings(REACH_NICHE_KEY,    "reach",    max_age=_SERVE_MAX_AGE)
 
-    # ── 3. Sync callables for asyncio.to_thread (ai.messages.create is blocking)
-    def _main_claude_call() -> dict:
-        msg = ai.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=8192,
-            system=system_prompt,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Generate internship recommendations for this student:\n\n"
-                    f"{json.dumps(profile.model_dump(), indent=2)}"
-                ),
-            }],
-        )
-        raw = _strip_fences(msg.content[0].text)
-        print(f"[internships] Claude raw response (first 300 chars): {raw[:300]}")
-        data = json.loads(raw)
-        print(
-            f"[internships] bucket sizes: local={len(data.get('local', []))}, "
-            f"big_tech={len(data.get('big_tech', []))}, "
-            f"startup={len(data.get('startup', []))}, "
-            f"reach={len(data.get('reach', []))}"
-        )
-        return data
+    local_rows: list[dict] = []
+    if metro in get_rotation_metros():
+        local_rows = get_listings(metro, "local", max_age=_SERVE_MAX_AGE)
+        print(f"[serve] metro={metro!r} in rotation — local from index ({len(local_rows)} rows)")
+    # Fall back to a live fetch when the metro is NOT in rotation OR is seeded-but-not-yet-
+    # ingested (empty/stale index) — so seeding a metro can never serve an empty local bucket.
+    # Once the worker has populated the 30 seeded metros, this never fires for them.
+    if not local_rows:
+        local_rows = await _live_local_fetch(profile, metro)
 
-    # ── 4. Run both Claude calls in parallel
-    if startup_listings:
-        main_data, startup_items = await asyncio.gather(
-            asyncio.to_thread(_main_claude_call),
-            asyncio.to_thread(_generate_startup_internships_sync, profile, startup_listings),
-        )
-    else:
-        # Fallback: let main Claude generate startup too (current behavior)
-        main_data = await asyncio.to_thread(_main_claude_call)
-        startup_items = []
+    print(f"[serve] index sizes: startup={len(nat_startup)} big_tech={len(nat_bigtech)} "
+          f"reach={len(reach_rows)} local={len(local_rows)}")
 
-    # ── 5. Build candidate pool (up to 10 per bucket)
-    all_items = {
-        "local":    [Internship(**i) for i in main_data.get("local",    [])[:10]],
-        "big_tech": [Internship(**i) for i in main_data.get("big_tech", [])[:10]],
-        "startup":  startup_items[:10] if startup_listings
-                    else [Internship(**i) for i in main_data.get("startup", [])[:10]],
-        "reach":    [Internship(**i) for i in main_data.get("reach",    [])[:10]],
+    # bucket -> candidate rows in minimal serving shape
+    pools: dict[str, list[dict]] = {
+        "startup":  _to_listings(nat_startup),
+        "big_tech": _to_listings(nat_bigtech),
+        "reach":    _to_listings(reach_rows),
+        "local":    _to_listings(local_rows),
     }
 
-    # ── 6. URL finding — skip for startup items that already have application_url set
-    flat: list[Internship] = []
-    flat_buckets: list[str] = []
-    for bucket_name, items in all_items.items():
-        for item in items:
-            flat.append(item)
-            flat_buckets.append(bucket_name)
+    # ── 2. RANK (no LLM): embed the profile once, pre-filter ineligible rows, and
+    #        cosine-narrow each bucket to _PRESELECT. Degrades to the unranked pool (DB
+    #        order) when Voyage is off or a bucket can't be ranked.
+    async with timed("internships/rank (embed + cosine)"):
+        q_vec = await _embed_profile(profile)
+        if q_vec is not None:
+            pools = {b: _safe_rank(b, rows, q_vec) for b, rows in pools.items()}
+            print(f"[serve] ranked pools (dim={len(q_vec)}): "
+                  + ", ".join(f"{b}={len(rows)}" for b, rows in pools.items()))
+        else:
+            print("[serve] profile embedding unavailable — serving unranked pools (DB order)")
 
-    url_sem = asyncio.Semaphore(8)
+    # ── 3. SELECT + BUILD (no LLM): company-diversity trim → cards from precomputed fields.
+    buckets = {b: _select_and_build(rows, b) for b, rows in pools.items()}
+    print("[serve] feed sizes: " + ", ".join(f"{b}={len(items)}" for b, items in buckets.items()))
 
-    async def _get_url_sem(i: Internship, bucket: str) -> str | None:
-        if i.application_url:  # already set from real listing — skip URL-finding
-            return i.application_url
-        async with url_sem:
-            return await _get_url(i.title, i.company, bucket)
-
-    urls = await asyncio.gather(*[_get_url_sem(i, b) for i, b in zip(flat, flat_buckets)])
-    for internship, url in zip(flat, urls):
-        internship.application_url = url
-
-    # ── 7. Validate all URLs — cap at 10 concurrent HTTP calls with a semaphore
-    sem = asyncio.Semaphore(10)
-    validated: dict[str, list[Internship]] = {}
-    for bucket_name, candidates in all_items.items():
-        flags = await asyncio.gather(
-            *[_validate_with_sem(sem, i, bucket_name) for i in candidates]
-        )
-        passed = [i for i, ok in zip(candidates, flags) if ok][:5]
-        n_dropped = sum(1 for ok in flags if not ok)
-        print(
-            f"[validate-summary] bucket={bucket_name} "
-            f"candidates={len(candidates)} passed={len(passed)} dropped={n_dropped}"
-        )
-        if len(passed) < 3:
-            print(f"[validate] WARNING bucket={bucket_name} only {len(passed)} passed")
-        validated[bucket_name] = passed
-
-    return InternshipBuckets(**validated)
+    return InternshipBuckets(
+        startup=buckets["startup"],
+        big_tech=buckets["big_tech"],
+        reach=buckets["reach"],
+        local=buckets["local"],
+    )
 
 
 @router.post("/internships/search", response_model=InternshipBuckets)
@@ -779,3 +545,71 @@ async def internships_search_route(profile: ProfileAnalysis):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Deferred per-role annotation ─────────────────────────────────────────────
+# The /run feed is zero-LLM; the results page fans the served URLs out here to fill in the
+# personalized "why you fit" text one role at a time (streamed ndjson, mirrors /analyze/batch).
+
+async def _annotate_one(
+    i: int, profile: ProfileAnalysis, url: str, bucket: str, city: str | None,
+) -> AnnotateEnvelope:
+    """Look up one served listing by URL, run the slim fit-only Sonnet call, and return an
+    envelope. A missing row → error; a model decline/error → ok with empty fit (card just
+    keeps its blank 'why you fit' rather than spinning forever)."""
+    try:
+        row = get_listing_by_url(url)
+        if not row:
+            return AnnotateEnvelope(
+                index=i, status="error",
+                error=AnnotateError(message="listing not found", code="NOT_FOUND"),
+            )
+        listing = _to_listings([row])[0]
+        fields = _fit_fields(listing)
+        # sonnet_sem: process-wide Sonnet concurrency cap (lib/anthropic_client.py).
+        async with sonnet_sem:
+            out = await asyncio.to_thread(_annotate_fit_sync, profile, fields, bucket, city)
+        return AnnotateEnvelope(
+            index=i, status="ok",
+            fit_explanation=(out or {}).get("fit_explanation") or "",
+            reach_gap=(out or {}).get("reach_gap"),
+        )
+    except Exception as exc:
+        print(f"[annotate-route] job[{i}] url={url!r} failed: {exc}")
+        return AnnotateEnvelope(
+            index=i, status="error",
+            error=AnnotateError(message=str(exc)[:200], code="ANNOTATE_FAILED"),
+        )
+
+
+@router.post("/internships/annotate")
+async def internships_annotate_route(req: AnnotateRequest):
+    """Streams ndjson: one AnnotateEnvelope per line, in completion order. Each job is a
+    served (url, bucket); we write its per-user fit_explanation (+reach_gap for reach).
+    In-flight Sonnet calls are bounded by the process-wide sonnet_sem."""
+    city = _parse_metro(req.profile.location)
+    queue: asyncio.Queue[AnnotateEnvelope] = asyncio.Queue()
+
+    async def _one(i: int, job) -> None:
+        bucket_city = city if job.bucket == "local" else None
+        env = await _annotate_one(i, req.profile, job.url, job.bucket, bucket_city)
+        await queue.put(env)
+
+    async def _gen():
+        tasks = [asyncio.create_task(_one(i, j)) for i, j in enumerate(req.jobs)]
+        pending = len(tasks)
+        try:
+            while pending:
+                env = await queue.get()
+                yield env.model_dump_json(exclude_none=True) + "\n"
+                pending -= 1
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+
+    return StreamingResponse(
+        _gen(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )

@@ -1,0 +1,84 @@
+"""
+Shared Firecrawl client — a single source of truth for both the /analyze fetch
+pipeline (routes/analyze.py) and the internships URL-liveness check
+(routes/internships.py).
+
+Firecrawl renders JavaScript and (in "stealth" proxy mode) bypasses Cloudflare,
+so it's the only way to get a real signal from JS-SPA career sites and
+Cloudflare-walled domains where a plain httpx request sees nothing useful.
+"""
+
+import os
+
+import httpx
+
+# ── Env config ────────────────────────────────────────────────────────────────
+API_KEY    = os.getenv("FIRECRAWL_API_KEY", "")
+BASE_URL   = os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev").rstrip("/")
+WAIT_MS    = int(os.getenv("FIRECRAWL_WAIT_MS",    "5000"))    # JS render wait
+TIMEOUT_MS = int(os.getenv("FIRECRAWL_TIMEOUT_MS", "90000"))   # total request budget
+# NOTE: this is a SINGLE budget covering BOTH the page fetch (~10s) AND the LLM
+# schema-extraction step (the "extract"/json format), which alone can run ~30s+ on
+# verbose career pages. At 45000 the combination timed out and the whole scrape
+# returned nothing even though the page fetched fine (HTTP 200) — so keep this >= 90000.
+PROXY_MODE = os.getenv("FIRECRAWL_PROXY_MODE", "basic")        # "basic" | "stealth"
+
+# ── Job extraction schema ───────────────────────────────────────────────────────
+JOB_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "job_title":       {"type": "string", "description": "Job title or position name"},
+        "company_name":    {"type": "string", "description": "Hiring company name"},
+        "location":        {"type": "string", "description": "Job location or 'Remote'"},
+        "employment_type": {"type": "string", "description": "e.g. Internship, Full-time, Part-time"},
+        "description":     {"type": "string", "description": "Full job description body text"},
+        "requirements": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Must-have qualifications, each as a short phrase",
+        },
+        "nice_to_haves": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Preferred but not required qualifications",
+        },
+        "compensation": {"type": "string", "description": "Salary range or compensation details"},
+    },
+    "required": ["job_title", "description"],
+}
+
+
+def is_available() -> bool:
+    """True when a Firecrawl API key is configured."""
+    return bool(API_KEY)
+
+
+async def scrape(url: str, proxy: str) -> dict:
+    """
+    POST one Firecrawl scrape request and return the raw response dict.
+    Returns {} when no API key is set or on HTTP >= 400.
+    Raises httpx.RequestError on network failure (callers decide how to handle).
+    """
+    if not API_KEY:
+        return {}
+    fc_timeout = TIMEOUT_MS / 1000 + 5  # add 5 s buffer over Firecrawl's own budget
+    async with httpx.AsyncClient(timeout=fc_timeout) as client:
+        resp = await client.post(
+            f"{BASE_URL}/v1/scrape",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            json={
+                "url": url,
+                "formats": ["markdown", "extract"],
+                "extract": {
+                    "schema": JOB_SCHEMA,
+                    "prompt": "Extract the job posting details from this career page.",
+                },
+                "waitFor": WAIT_MS,
+                "proxy":   proxy,
+                "timeout": TIMEOUT_MS,
+            },
+        )
+    if resp.status_code >= 400:
+        print(f"[firecrawl] {proxy}: HTTP {resp.status_code}: {resp.text[:200]}")
+        return {}
+    return resp.json()

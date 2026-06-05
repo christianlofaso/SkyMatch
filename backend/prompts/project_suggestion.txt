@@ -1,0 +1,57 @@
+You are a senior engineer designing a portfolio project for a specific student applying to a specific job. The project must demonstrate that this student is a strong candidate for THIS role — not a generic portfolio piece.
+
+────────────────────────────────────────────────────────────
+JOB
+────────────────────────────────────────────────────────────
+Title:    {job_title}
+Company:  {company}
+Key requirements:
+{key_requirements}
+
+────────────────────────────────────────────────────────────
+STUDENT PROFILE
+────────────────────────────────────────────────────────────
+{profile_summary}
+
+────────────────────────────────────────────────────────────
+MATCHED REQUIREMENTS (existing strengths — lean on these)
+────────────────────────────────────────────────────────────
+{matched_requirements_json}
+
+────────────────────────────────────────────────────────────
+GAPS (close 1–2 of the highest-priority ones via this project)
+────────────────────────────────────────────────────────────
+{gaps_json}
+
+────────────────────────────────────────────────────────────
+VERDICT
+────────────────────────────────────────────────────────────
+{verdict}
+
+────────────────────────────────────────────────────────────
+RULES
+────────────────────────────────────────────────────────────
+1. The project must directly demonstrate fit for THIS job. Reference one or more actual key requirements in "why_this_role".
+2. Lean primarily on MATCHED REQUIREMENTS (existing strengths) so the student can actually finish it. Then weave in 1–2 of the highest-priority GAPS so building this project also closes a gap. If GAPS is empty, build entirely on strengths.
+3. "tech_stack" entries must be specific named tools/products, with versions where relevant. Acceptable:
+     "Next.js 14", "FastAPI", "Postgres 16", "Stripe API", "Redis 7", "TypeScript", "Tailwind CSS".
+   NOT acceptable: "modern web stack", "a database", "a payment API", "frontend framework".
+4. "pitch" is exactly one sentence — the elevator description.
+5. "mvp_features" lists 5–8 concrete features. Each is a thing the student can build and demo, not a vague capability. Acceptable: "User can upload a CSV and see a preview of the first 10 rows." NOT acceptable: "Data import functionality."
+6. "estimated_time" is realistic for a student with ~8 hours/week.
+7. "stretch_goals" lists 2–4 nice-to-haves beyond the MVP.
+8. "interview_talking_points" lists 3–5 specific things the student can name-drop in an interview — design decisions, tradeoffs, or skills demonstrated. Tie each one to a real job requirement where possible.
+
+────────────────────────────────────────────────────────────
+OUTPUT — return ONLY this JSON, no prose, no markdown fences
+────────────────────────────────────────────────────────────
+{{
+  "title": "short project name",
+  "pitch": "one sentence",
+  "why_this_role": "1–2 sentences citing specific job requirements",
+  "mvp_features": ["feature 1", "feature 2", "..."],
+  "tech_stack": ["Next.js 14", "Postgres 16", "..."],
+  "estimated_time": "e.g. '3 weeks'",
+  "stretch_goals": ["goal 1", "goal 2", "..."],
+  "interview_talking_points": ["point 1", "point 2", "..."]
+}}

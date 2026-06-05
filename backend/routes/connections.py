@@ -1,14 +1,15 @@
 import asyncio
 import json
-import anthropic
 from fastapi import APIRouter, HTTPException
 
 from cache import get_people_cache, set_people_cache, hash_filters
+from lib.anthropic_client import client as ai
+from lib.jsonparse import parse_json_with_context
+from lib.timing import timed
 from linkd import LinkdClient
 from schemas import Connection, ProfileAnalysis
 
 router = APIRouter()
-ai = anthropic.Anthropic()
 
 CONNECTIONS_SYSTEM = """You are given a LinkedIn ProfileAnalysis and a list of candidate profiles from a people search.
 Your job is to select the 10 best connections for this person based on shared commonalities.
@@ -104,7 +105,8 @@ async def suggest_connections(profile: ProfileAnalysis) -> list[Connection]:
             "count": 20,
         }))
 
-    all_results_nested = await asyncio.gather(*tasks)
+    async with timed("connections: people search (linkd, parallel)"):
+        all_results_nested = await asyncio.gather(*tasks)
 
     print(f"[connections] searches run: {len(tasks)}, results per search: {[len(b) for b in all_results_nested]}")
 
@@ -125,26 +127,31 @@ async def suggest_connections(profile: ProfileAnalysis) -> list[Connection]:
     if not candidates:
         return []
 
-    msg = ai.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=3000,
-        system=CONNECTIONS_SYSTEM,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"User profile:\n{json.dumps(profile.model_dump(), indent=2)}\n\n"
-                f"Candidate profiles ({len(candidates)} total):\n"
-                f"{json.dumps(candidates, indent=2)}"
-            ),
-        }],
-    )
+    # ai.messages.create is blocking — run it in a thread so it doesn't freeze the
+    # event loop (and the parallel internships branch) while it waits on the LLM.
+    async with timed("connections: claude (opus)"):
+        msg = await asyncio.to_thread(
+            ai.messages.create,
+            model="claude-opus-4-8",
+            max_tokens=3000,
+            system=CONNECTIONS_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"User profile:\n{json.dumps(profile.model_dump(), indent=2)}\n\n"
+                    f"Candidate profiles ({len(candidates)} total):\n"
+                    f"{json.dumps(candidates, indent=2)}"
+                ),
+            }],
+        )
 
     raw = _strip_fences(msg.content[0].text)
     print(f"[connections] Claude raw (first 300 chars): {raw[:300]}")
     if not raw:
         print("[connections] WARNING: Claude returned empty response — returning []")
         return []
-    data = json.loads(raw)
+    # Lenient parse: recover the JSON even if Claude wraps it in prose.
+    data = parse_json_with_context(raw, "connections")
     return [Connection(**c) for c in data]
 
 
