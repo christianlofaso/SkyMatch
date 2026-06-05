@@ -1,6 +1,9 @@
 # Logging conventions (backend)
 
 ```
+[error] ...             # Unhandled exception caught by the global handler (main.py) — "[error] unhandled {METHOD} {path}: {exc!r}" + traceback, then a clean 500 to the client
+[serve] ...             # Internship serving — index sizes, ranking, freshness fallback, and skipped-malformed-row notices
+[ingest] ...            # Worker run + bounded-DDG-query bail notices
 [profile] ...           # Profile extraction + rich fields
 [profile/from-resume]   # Resume upload: chars extracted, file name
 [connections] ...       # Connection search and Claude call
@@ -18,6 +21,8 @@
 [profile-rich] ...      # Rich field extraction counts (skills, work entries, projects)
 [timing] ...            # Per-stage wall-clock; ends with "[timing] ===== /run: total Nms =====" sorted breakdown
 ```
+
+**Global error handler:** `main.py` registers `@app.exception_handler(Exception)` as a backstop — any unhandled exception that escapes a route logs `[error] unhandled …` + a full `traceback.print_exc()` and returns a clean `500 {"detail": "Something went wrong on our end. Please try again."}` (no raw exception text leaks). FastAPI's built-in `HTTPException` / `RequestValidationError` handlers run first and never reach it; the streaming routes carry their own per-job envelopes. It has a `# SENTRY:` hook comment for when a DSN is wired (deferred). Logging stays `print()`-based (host captures stdout in prod).
 
 **Timing/observability:** `backend/lib/timing.py` provides `timing_session(name)` (collects spans, prints a sorted % breakdown on exit), `timed(label)` (async ctx mgr), and `timed_call(label, coro)` (await a coro under a span — handy inside `asyncio.gather`). `/run` is wrapped in a session; profile, connections (search + claude), and internships (`/1` scrapes → `/2` claude calls → `/3` url-finding → `/4` validation, each sub-timed) all emit spans. Parallel spans overlap, so per-span ms sum to more than the session total — the **total is the real latency**; the % is each branch's share of wall-clock.
 

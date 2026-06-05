@@ -8,6 +8,7 @@ so it's the only way to get a real signal from JS-SPA career sites and
 Cloudflare-walled domains where a plain httpx request sees nothing useful.
 """
 
+import asyncio
 import os
 
 import httpx
@@ -62,22 +63,36 @@ async def scrape(url: str, proxy: str) -> dict:
     if not API_KEY:
         return {}
     fc_timeout = TIMEOUT_MS / 1000 + 5  # add 5 s buffer over Firecrawl's own budget
-    async with httpx.AsyncClient(timeout=fc_timeout) as client:
-        resp = await client.post(
-            f"{BASE_URL}/v1/scrape",
-            headers={"Authorization": f"Bearer {API_KEY}"},
-            json={
-                "url": url,
-                "formats": ["markdown", "extract"],
-                "extract": {
-                    "schema": JOB_SCHEMA,
-                    "prompt": "Extract the job posting details from this career page.",
-                },
-                "waitFor": WAIT_MS,
-                "proxy":   proxy,
-                "timeout": TIMEOUT_MS,
-            },
-        )
+    payload = {
+        "url": url,
+        "formats": ["markdown", "extract"],
+        "extract": {
+            "schema": JOB_SCHEMA,
+            "prompt": "Extract the job posting details from this career page.",
+        },
+        "waitFor": WAIT_MS,
+        "proxy":   proxy,
+        "timeout": TIMEOUT_MS,
+    }
+    # One retry on a NETWORK error only (a transient blip). HTTP >= 400 is a real answer
+    # (returns {} below) and is NOT retried; the caller maps it.
+    last_exc: httpx.RequestError | None = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=fc_timeout) as client:
+                resp = await client.post(
+                    f"{BASE_URL}/v1/scrape",
+                    headers={"Authorization": f"Bearer {API_KEY}"},
+                    json=payload,
+                )
+            break
+        except httpx.RequestError as e:
+            last_exc = e
+            if attempt == 0:
+                print(f"[firecrawl] {proxy}: network error, retrying once: {e!r}")
+                await asyncio.sleep(1.0)
+                continue
+            raise last_exc
     if resp.status_code >= 400:
         print(f"[firecrawl] {proxy}: HTTP {resp.status_code}: {resp.text[:200]}")
         return {}

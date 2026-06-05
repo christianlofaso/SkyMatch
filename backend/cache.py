@@ -116,6 +116,14 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_cost_events_created
                 ON cost_events(created_at);
+            -- Tiny persistent key/value flags for runtime app state (e.g. the manual
+            -- kill switch, key='kill_switch' value='on'|'off'). Survives restarts so an
+            -- emergency halt stays in effect; read by lib/guard.py, written by /admin.
+            CREATE TABLE IF NOT EXISTS app_flags (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             -- Pre-ingested job listings, populated by the background worker
             -- (worker/ingest.py). Unlike every other table here (one JSON blob per
             -- key), this is a QUERYABLE COLLECTION the serving layer filters by
@@ -413,6 +421,35 @@ def query_cost_events(since: int) -> list[dict]:
             "SELECT * FROM cost_events WHERE created_at >= ? ORDER BY created_at", (since,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def sum_spend_since(since: int) -> float:
+    """Total real Claude spend (USD) since `since` (Unix ts). Only kind='call' rows
+    carry spend; 'hit' rows are savings. Used by the spend-cap kill switch."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(usd), 0.0) AS total FROM cost_events "
+            "WHERE kind = 'call' AND created_at >= ?",
+            (since,),
+        ).fetchone()
+    return float(row["total"]) if row else 0.0
+
+
+# --- App flags (persistent runtime key/value, e.g. the manual kill switch) ----
+
+def get_flag(key: str) -> str | None:
+    with get_db() as conn:
+        row = conn.execute("SELECT value FROM app_flags WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_flag(key: str, value: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO app_flags (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, value, int(time.time())),
+        )
 
 
 # --- URL liveness cache (global, 7-day TTL) --------------------------------

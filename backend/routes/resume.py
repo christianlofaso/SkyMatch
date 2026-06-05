@@ -4,6 +4,7 @@ import asyncio
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from cache import get_profile_cache, set_profile_cache, text_cache_key
+from lib.cost import cost_session
 from routes.profile import analyze_profile, extract_rich_fields
 from schemas import RunRequest, UnifiedProfile
 
@@ -60,10 +61,11 @@ async def from_resume(file: UploadFile = File(...)) -> dict:
         else:
             resume_text = await asyncio.to_thread(_extract_text_docx, data)
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Could not extract text from file: {e}")
+        print(f"[profile/from-resume] text extraction failed for {filename!r}: {e!r}")
+        raise HTTPException(status_code=422, detail="Couldn't read that file — it may be corrupt or password-protected. Try re-exporting it as a PDF.")
 
     if not resume_text.strip():
-        raise HTTPException(status_code=422, detail="Could not extract text from file: the file appears to be empty or image-only.")
+        raise HTTPException(status_code=422, detail="That file looks empty or image-only — we couldn't find any text to read. Try a text-based PDF or DOCX.")
 
     print(f"[profile/from-resume] extracted {len(resume_text)} chars from {filename!r}")
     truncated = resume_text[:12000]
@@ -71,12 +73,16 @@ async def from_resume(file: UploadFile = File(...)) -> dict:
     # --- Run ProfileAnalysis + rich extraction in parallel ---
     base_req = RunRequest(text=truncated)
     try:
-        base_profile, rich_data = await asyncio.gather(
-            analyze_profile(base_req),
-            extract_rich_fields(truncated),
-        )
+        with cost_session("/profile/from-resume"):
+            base_profile, rich_data = await asyncio.gather(
+                analyze_profile(base_req),
+                extract_rich_fields(truncated),
+            )
+    except HTTPException:
+        raise  # friendly mapped error — pass through
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Profile extraction failed: {e}")
+        print(f"[profile/from-resume] profile extraction failed: {e!r}")
+        raise HTTPException(status_code=500, detail="Couldn't build a profile from that resume. Please try again.")
 
     # --- Merge into UnifiedProfile ---
     profile = UnifiedProfile(

@@ -3,12 +3,14 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
 from cache import get_profile_cache, set_profile_cache, text_cache_key
 from config.models import MODEL_MID
 from lib.anthropic_client import client as ai, sonnet_sem
+from lib.cost import cost_session, record_usage
 from lib.jsonparse import parse_json_with_context
 from linkd import LinkdClient, extract_username
 from schemas import ProfileAnalysis, RunRequest
@@ -82,10 +84,47 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
     if req.url:
         username = extract_username(req.url)
         linkd = LinkdClient()
-        raw_profile = await linkd.get_profile(username)
+        try:
+            raw_profile = await linkd.get_profile(username)
+        except httpx.HTTPStatusError as e:
+            # Map LinkdAPI HTTP errors to friendly responses instead of leaking a raw 500.
+            status = e.response.status_code
+            if status in (404, 410):
+                raise ValueError(
+                    "No LinkedIn profile found at that URL — it may be private, renamed, "
+                    "or deleted. Try the 'Paste text' tab: open your profile, copy all the "
+                    "text, and paste it."
+                ) from e
+            if status == 429:
+                raise HTTPException(
+                    status_code=503,
+                    detail="The LinkedIn lookup service is busy right now. Please try again in a moment.",
+                ) from e
+            if status in (401, 403):
+                print(f"[profile] LinkdAPI auth error {status} for {username!r} — check LINKDAPI_KEY")
+                raise HTTPException(
+                    status_code=502,
+                    detail="LinkedIn lookup is temporarily unavailable. Try the 'Paste text' tab instead.",
+                ) from e
+            raise HTTPException(
+                status_code=502,
+                detail="LinkedIn lookup is temporarily unavailable. Try again, or paste your profile text.",
+            ) from e
+        except httpx.RequestError as e:  # network / timeout after retries
+            print(f"[profile] LinkdAPI network error for {username!r}: {e!r}")
+            raise HTTPException(
+                status_code=504,
+                detail="Timed out fetching your LinkedIn profile. Try again, or paste your profile text.",
+            ) from e
         profile_text = json.dumps(raw_profile, indent=2)[:8000]
     else:
         profile_text = (req.text or "")[:8000]
+        # Guard against an empty/too-short paste BEFORE spending an LLM call.
+        if len(profile_text.strip()) < 40:
+            raise ValueError(
+                "That's too short to read as a profile. Paste the full text of your "
+                "LinkedIn profile (headline, experience, education, skills)."
+            )
 
     # ai.messages.create is BLOCKING — must run in a worker thread, or it freezes the
     # event loop and serializes the asyncio.gather in resume.py (analyze_profile +
@@ -101,6 +140,7 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
             system=PROFILE_SYSTEM,
             messages=[{"role": "user", "content": f"LinkedIn profile data:\n\n{profile_text}"}],
         )
+    record_usage("profile-extract", MODEL_MID, msg.usage)
 
     raw = _strip_fences(msg.content[0].text)
     # Lenient parse: recover the JSON even if the model wraps it in prose.
@@ -143,6 +183,7 @@ async def extract_rich_fields(source_text: str) -> dict:
             system=RICH_SYSTEM,
             messages=[{"role": "user", "content": f"Profile data:\n\n{source_text[:12000]}"}],
         )
+    record_usage("profile-rich", MODEL_MID, msg.usage)
     raw = _strip_fences(msg.content[0].text)
     # Lenient parse: recover the JSON even if the model wraps it in prose.
     data = parse_json_with_context(raw, "profile-rich")
@@ -157,8 +198,12 @@ async def extract_rich_fields(source_text: str) -> dict:
 @router.post("/profile/analyze", response_model=ProfileAnalysis)
 async def profile_analyze_route(req: RunRequest):
     try:
-        return await analyze_profile(req)
+        with cost_session("/profile/analyze"):
+            return await analyze_profile(req)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except HTTPException:
+        raise  # already a friendly mapped error — don't bury it in a generic 500
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[profile] unexpected error in /profile/analyze: {e!r}")
+        raise HTTPException(status_code=500, detail="Couldn't analyze that profile. Please try again.")

@@ -35,7 +35,12 @@ import anthropic
 # SDK retry IS exponential backoff w/ jitter honoring Retry-After. Raise the ceiling
 # from the default(2) so 429 bursts recover instead of surfacing as errors.
 _MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "8"))
-client = anthropic.Anthropic(max_retries=_MAX_RETRIES)
+# Per-request timeout (the SDK default is a loose 600s). Bound a genuine API hang while
+# leaving headroom for the longest call we make — the Opus roadmap (max_tokens 4096),
+# which can run ~1-2 min. Keep this comfortably ABOVE that or roadmap calls get cut +
+# retried. Tune via ANTHROPIC_TIMEOUT_SEC.
+_TIMEOUT_SEC = float(os.getenv("ANTHROPIC_TIMEOUT_SEC", "180"))
+client = anthropic.Anthropic(max_retries=_MAX_RETRIES, timeout=_TIMEOUT_SEC)
 
 # Process-wide cap on concurrent Sonnet (MODEL_MID) calls. Constructing an
 # asyncio.Semaphore at import time is safe on 3.12 (it binds to the running loop lazily).

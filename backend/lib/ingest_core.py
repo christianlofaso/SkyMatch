@@ -7,6 +7,7 @@ re-imports these names, so live serving behavior is unchanged.
 """
 import asyncio
 import json
+import os
 import re
 import urllib.parse
 
@@ -18,6 +19,23 @@ from cache import (
 )
 from lib import firecrawl
 from schemas import ProfileAnalysis
+
+# Per-query DDG timeout. DDGS is synchronous, not thread-safe, and can hang for MINUTES when
+# rate-limited; without a bound one stuck query stalls the whole worker run. Each query thread
+# is wrapped in asyncio.wait_for so a hung endpoint degrades to an empty result, not a hang.
+_DDG_QUERY_TIMEOUT = int(os.getenv("DDG_QUERY_TIMEOUT_SEC", "20"))
+
+
+async def _bounded_query(run_query, q: str) -> list[dict]:
+    """Run a blocking DDG `run_query(q)` in a worker thread under a hard timeout.
+    Timeout or error → empty list (same degradation as the existing per-query swallow).
+    Note: wait_for can't kill the underlying thread, but it unblocks the gather so the
+    run proceeds while the orphaned DDGS call finishes on its own."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(run_query, q), timeout=_DDG_QUERY_TIMEOUT)
+    except Exception as e:
+        print(f"[ingest] DDG query bailed ({q!r}): {type(e).__name__}")
+        return []
 
 
 # Matches a numeric job ID (≥5 digits) or a UUID anywhere in a URL path
@@ -620,7 +638,7 @@ async def _scrape_startup_listings(profile: ProfileAnalysis) -> list[dict]:
         except Exception:
             return []
 
-    all_batches = await asyncio.gather(*[asyncio.to_thread(_run_query, q) for q in queries])
+    all_batches = await asyncio.gather(*[_bounded_query(_run_query, q) for q in queries])
 
     seen: set[str] = set()
     listings: list[dict] = []
@@ -773,7 +791,7 @@ async def _scrape_bigtech_listings(profile: ProfileAnalysis) -> list[dict]:
         except Exception:
             return []
 
-    ddg_gather = asyncio.gather(*[asyncio.to_thread(_run_query, q) for q in queries])
+    ddg_gather = asyncio.gather(*[_bounded_query(_run_query, q) for q in queries])
     all_batches, ats_listings = await asyncio.gather(ddg_gather, _fetch_bigtech_ats_listings(profile))
 
     seen: set[str] = set()
@@ -843,7 +861,7 @@ async def _scrape_local_listings(profile: ProfileAnalysis) -> list[dict]:
         except Exception:
             return []
 
-    all_batches = await asyncio.gather(*[asyncio.to_thread(_run_query, q) for q in queries])
+    all_batches = await asyncio.gather(*[_bounded_query(_run_query, q) for q in queries])
 
     seen: set[str] = set()
     listings: list[dict] = []

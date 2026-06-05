@@ -1,5 +1,23 @@
 # Route details
 
+## Cost-protection gate (`lib/guard.py` + `routes/admin.py`)
+
+The LLM-firing routers are wired in `main.py` with `dependencies=[Depends(cost_guard)]`: `run_router`, `profile_router`, `resume_router`, `analyze_router`, `internships_router`, `connections_router`. `cost_router`, `admin_router`, and the app-level `/health` are **ungated** so observability and recovery survive a halt.
+
+`cost_guard` (a `yield`-dependency — chosen over `BaseHTTPMiddleware`, which buffers/breaks the ndjson streams of `/analyze/batch` + `/internships/annotate`) does, per request:
+1. **Kill switch → `503`** if the manual flag `app_flags.kill_switch == 'on'` (read per request) OR rolling-window spend ≥ `SPEND_CAP_USD_DAILY` (cached `SPEND_CACHE_TTL_SEC`, computed by `cache.sum_spend_since`). Both reads fail **open**.
+2. **Per-IP concurrency cap → `429`** if in-flight ≥ `RATE_LIMIT_CONCURRENT`.
+3. **Per-IP sliding-window rate cap → `429`** if ≥ `RATE_LIMIT_PER_MIN` in `RATE_LIMIT_WINDOW_SEC`.
+4. Reserve a slot; `yield`; release in `finally` (teardown runs after the stream completes).
+
+Client IP = first hop of `X-Forwarded-For` (deploy is behind a proxy) else the direct peer. **All state is in-process / single-worker** (rate dicts + cached spend total) — bounds traffic only under ONE uvicorn worker; the manual flag persists in SQLite (`app_flags`). Knobs: `RATE_LIMIT_PER_MIN`/`_CONCURRENT`/`_WINDOW_SEC`, `SPEND_CAP_USD_DAILY`/`_WINDOW_SEC`, `SPEND_CACHE_TTL_SEC`.
+
+**`routes/admin.py`** (token-guarded by `X-Admin-Token` == env `ADMIN_TOKEN`; unset/mismatch → `403`, fail closed):
+- `POST /admin/killswitch {on: bool}` → `set_flag("kill_switch", "on"|"off")`.
+- `GET /admin/status` → `status_snapshot()`: kill-switch state, rolling spend vs cap, rate-limit config.
+
+> Account-side backstop (not code): also set a monthly usage limit + billing alert in the Anthropic Console — the in-app cap guards credit burn, the account limit is the hard stop.
+
 ## `routes/run.py` — POST /run
 
 Orchestrator with three code paths depending on inputs:
@@ -30,10 +48,12 @@ Runs both Case 1 and Case 2 paths, then calls `_merge_profiles(linkedin_profile,
 
 Extracts `ProfileAnalysis` from raw LinkedIn data using Claude. Two-function module:
 
-**`analyze_profile(req)`** — rejects non-LinkedIn URLs immediately (hostname check: must contain `linkedin.com`). If URL, fetches via `LinkdClient.get_profile()`. Sends to Claude, validates result. Raises `ValueError` (not HTTPException) for caller flexibility. Guards:
+**`analyze_profile(req)`** — rejects non-LinkedIn URLs immediately (hostname check: must contain `linkedin.com`). If URL, fetches via `LinkdClient.get_profile()`. Sends to Claude, validates result. Raises `ValueError` (→422) for soft guards and `HTTPException` for upstream failures. Guards:
 - Non-LinkedIn URL → `ValueError("That doesn't look like a LinkedIn profile URL...")`
+- Paste shorter than ~40 chars → `ValueError("That's too short to read as a profile...")` (before any LLM call)
 - LLM returned no `full_name` → `ValueError("No LinkedIn profile found at that URL...")`
 - Pydantic `ValidationError` → `ValueError("Could not extract a complete profile...")`
+- **LinkdAPI errors mapped** (was a raw 500): `httpx.HTTPStatusError` 404/410 → `ValueError` (private/missing → 422), 429 → `HTTPException(503)`, 401/403 → `HTTPException(502)` (logs the key issue), other 5xx → `HTTPException(502)`; `httpx.RequestError`/timeout → `HTTPException(504)`. `LinkdClient` retries transient failures (429/5xx/network) before these surface. **Callers (`/profile/analyze`, `/run`, `/profile/from-resume`) must `except HTTPException: raise` before their generic handler** or these regress to 500s.
 
 **`extract_rich_fields(source_text)`** — second Claude call using `rich_profile_extraction.txt` prompt. Returns dict with `skills_with_context`, `education`, `work_experience`, `projects`, `certifications`. Caller handles exceptions.
 
@@ -127,10 +147,10 @@ Runs 3-5 parallel LinkdAPI `search_people` queries using different keyword combi
 
 **Flow:**
 1. `metro = _parse_metro(profile.location)`.
-2. Read the index: `get_listings("_national", "startup"|"big_tech")` + `get_listings("_reach", "reach")` (metro-independent, served to all), all with `max_age = _SERVE_MAX_AGE (3d)`.
+2. Read the index via `_serve_national_rows("_national", "startup"|"big_tech")` + `_serve_national_rows("_reach", "reach")` (metro-independent, served to all), at `max_age = _SERVE_MAX_AGE` (`SERVE_MAX_AGE_HOURS`, default **48h** — tightened from 72h so served links are fresher). **Empty-bucket fallback:** if a national/reach bucket is empty at the tight window (the worker lagged past 48h), `_serve_national_rows` retries that bucket once at `_SERVE_MAX_AGE_FALLBACK` (`SERVE_MAX_AGE_FALLBACK_HOURS`, default 96h) and logs `[serve] bucket … fell back` — degrades to slightly-staler rather than empty. (Local has its own live-fetch fallback, so it reads at the tight window directly.) **This freshness depends on the worker's cron cadence** — see the gotcha.
 3. **local**: read `get_listings(metro, "local")` if `metro in get_rotation_metros()`; **fall back to `_live_local_fetch(profile, metro)` when that's empty** (metro not in rotation, OR seeded-but-not-yet-ingested/stale — so seeding the ~30 `SEED_METROS` can never serve an empty local bucket; once the worker populates them, this never fires for a seeded metro). The live-fetch — scrape + validate the local bucket once (bounded by `_LIVE_LOCAL_BUDGET=35s` via `asyncio.wait_for`), `upsert_listing` the survivors under `niche_key=metro`, then **run the worker's parse precompute INLINE** on them (`lib.precompute.parse_and_embed_rows(..., firecrawl_company=False)` — Haiku company/role_category + Voyage embedding; the **only LLM on the request path**, and only for an uncovered metro's first visit), and `add_rotation_metro(metro)`. Returns the **freshly-read DB rows** (`get_listings(metro, "local")`) so the inline parse takes effect THIS request; on timeout/error it still returns whatever upserted (parsed or not), never `[]`. _(Parsing inline is the fix for the recurring "Unknown company" + off-field local role: a scraped-but-unparsed row has no resolved company, no `role_category`, no embedding — see step 4/5.)_
 4. **Rank** (`internships/rank (embed + cosine)`, no LLM): `_to_listings(rows)` maps store rows → the serving shape (the precompute — `parsed`, `embedding`, `embedding_model`, `embedding_dim` — **plus** the raw scraped columns `search_title`/`company`/`verified_location`/`snippet` used as a fallback). `_embed_profile` embeds `_profile_brief(profile)` once (Voyage, `input_type=query`, per-process cached by `EMBED_MODEL`+brief). `_safe_rank`/`_prefilter_and_rank` per bucket: drop rows whose `parsed.is_internship is False`; drop **PhD-mandatory** roles in EVERY bucket (parsed `requires_phd is True` OR a `_PHD_TITLE_RE` "PhD"/"Ph.D" title match — the undergrad-intern audience can't apply, and the title regex backstops unparsed rows + parse misses); and, for **reach OR local** (`_OFF_FIELD_BUCKETS`), drop `role_category` in `_OFF_FIELD_CATEGORIES` = finance/sales/marketing/recruiting/audit (off-field for this product's CS/eng audience); then cosine-rank embeddable rows (`mat @ q_vec`, both unit-normalized so dot == cosine) and keep top `_PRESELECT=18` + any unrankable remainder. **Degrades gracefully:** Voyage unavailable → `q_vec=None` → skip cosine, serve unranked (DB order); a per-bucket error → unranked pool; only rows whose `embedding_model`/`embedding_dim` match the current query are ranked. (The off-field filter only fires on **parsed** rows — an unparsed row can't be category-filtered, so the inline parse above is what makes it bite for live-fetched local.)
-5. **Select + build** (no LLM): `_select_and_build(rows, bucket)` walks the ranked rows in order, builds each card via `_build_internship` (display fields from `parsed_json`, or the raw columns when a row is unparsed; `fit_explanation=""`, `reach_gap=None`, `application_url`/`bucket` forced from the row), and keeps the top 5 while dropping exact-duplicate `(company, title)` roles and enforcing ≤2 per company — replacing both the old Sonnet SELECT and the old `_cap`. **Unparsed rows** (warming index / live-fetch before parse) have no `parsed_json`, so `_build_internship` + `_fit_fields` resolve a clean title + company via the chain **`parsed → _parse_title_company (`"{Role} @ {Company} - Jobs"` and `"{Role} - {Company} - {Lever/Greenhouse/Ashby}"`) → company_from_url (ATS slug) → column → "Unknown"`** — so an ATS-board URL never shows "Unknown" even with no Haiku key. **The ≤2/company cap is skipped for unresolved (`"Unknown"`) companies** so distinct unknowns don't collapse the bucket to 2.
+5. **Select + build** (no LLM): `_select_and_build(rows, bucket)` walks the ranked rows in order, builds each card via `_build_internship` (display fields from `parsed_json`, or the raw columns when a row is unparsed; `fit_explanation=""`, `reach_gap=None`, `application_url`/`bucket` forced from the row) **wrapped in a per-row `try/except` — a single malformed/wrong-typed row is logged (`[serve] skipped malformed …`) and skipped, so it can't break the whole bucket** — and keeps the top 5 while dropping exact-duplicate `(company, title)` roles and enforcing ≤2 per company — replacing both the old Sonnet SELECT and the old `_cap`. **Unparsed rows** (warming index / live-fetch before parse) have no `parsed_json`, so `_build_internship` + `_fit_fields` resolve a clean title + company via the chain **`parsed → _parse_title_company (`"{Role} @ {Company} - Jobs"` and `"{Role} - {Company} - {Lever/Greenhouse/Ashby}"`) → company_from_url (ATS slug) → column → "Unknown"`** — so an ATS-board URL never shows "Unknown" even with no Haiku key. **The ≤2/company cap is skipped for unresolved (`"Unknown"`) companies** so distinct unknowns don't collapse the bucket to 2.
 
 ## `routes/internships.py` — POST /internships/annotate (deferred fit text)
 

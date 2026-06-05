@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 
 import numpy as np
@@ -250,7 +251,13 @@ def _select_and_build(
     seen_roles: set[tuple[str, str]] = set()
     out: list[Internship] = []
     for row in rows:
-        item = _build_internship(row, bucket)
+        # Per-row isolation: a single malformed/unexpectedly-typed row (e.g. a non-str
+        # company from a bad parse) must not break the whole bucket — skip it and continue.
+        try:
+            item = _build_internship(row, bucket)
+        except Exception as e:
+            print(f"[serve] skipped malformed {bucket} row ({row.get('url', '?')}): {e!r}")
+            continue
         key = item.company.lower()
         # Skip an exact repeat of the same role at the same company (same title posted under
         # multiple URLs) — the per-company cap alone would otherwise show it twice.
@@ -271,9 +278,28 @@ def _select_and_build(
 
 
 # ── Index-serving constants ────────────────────────────────────────────────
-# Don't serve listings the worker hasn't re-validated within this window (generous enough
-# to survive a missed ~6h worker cycle); otherwise a stale-but-unpruned row could surface.
-_SERVE_MAX_AGE = 3 * ONE_DAY
+# Don't serve listings the worker hasn't re-validated within this window. Tightened from
+# 72h → 48h (env SERVE_MAX_AGE_HOURS) so served links are fresher; the worker runs ~every
+# 6h, so 48h is an ~8x margin. If the worker LAGS past this, a national bucket could go
+# empty — _serve_bucket_rows falls back to _SERVE_MAX_AGE_FALLBACK (env
+# SERVE_MAX_AGE_FALLBACK_HOURS, default 96h) for that bucket rather than show nothing.
+# (Reliability: keep SERVE_MAX_AGE_HOURS comfortably above the real worker cadence.)
+_SERVE_MAX_AGE = int(os.getenv("SERVE_MAX_AGE_HOURS", "48")) * 3600
+_SERVE_MAX_AGE_FALLBACK = int(os.getenv("SERVE_MAX_AGE_FALLBACK_HOURS", "96")) * 3600
+
+
+def _serve_national_rows(niche_key: str, bucket: str) -> list[dict]:
+    """Read a national/reach bucket at the tight freshness window; if it comes back empty
+    (worker lagged past _SERVE_MAX_AGE), retry once at the looser fallback window so the
+    bucket degrades to slightly-staler rather than empty. (Local has its own live-fetch
+    fallback, so it doesn't use this.)"""
+    rows = get_listings(niche_key, bucket, max_age=_SERVE_MAX_AGE)
+    if not rows and _SERVE_MAX_AGE_FALLBACK > _SERVE_MAX_AGE:
+        rows = get_listings(niche_key, bucket, max_age=_SERVE_MAX_AGE_FALLBACK)
+        if rows:
+            print(f"[serve] bucket {bucket} empty at {_SERVE_MAX_AGE//3600}h window -> "
+                  f"fell back to {_SERVE_MAX_AGE_FALLBACK//3600}h ({len(rows)} rows)")
+    return rows
 # Bound the on-request local scrape for an uncovered metro so a slow/rate-limited DDG can't
 # hang /run; on timeout we serve an empty local bucket (the worker backfills next run).
 _LIVE_LOCAL_BUDGET = 35  # seconds
@@ -491,9 +517,9 @@ async def search_internships(profile: ProfileAnalysis) -> InternshipBuckets:
     metro = _parse_metro(profile.location)
 
     # ── 1. Read the index (national pools are metro-independent; reach is its own pool)
-    nat_startup = get_listings(NATIONAL_NICHE_KEY, "startup",  max_age=_SERVE_MAX_AGE)
-    nat_bigtech = get_listings(NATIONAL_NICHE_KEY, "big_tech", max_age=_SERVE_MAX_AGE)
-    reach_rows  = get_listings(REACH_NICHE_KEY,    "reach",    max_age=_SERVE_MAX_AGE)
+    nat_startup = _serve_national_rows(NATIONAL_NICHE_KEY, "startup")
+    nat_bigtech = _serve_national_rows(NATIONAL_NICHE_KEY, "big_tech")
+    reach_rows  = _serve_national_rows(REACH_NICHE_KEY,    "reach")
 
     local_rows: list[dict] = []
     if metro in get_rotation_metros():

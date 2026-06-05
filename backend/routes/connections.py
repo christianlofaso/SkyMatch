@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from cache import get_people_cache, set_people_cache, hash_filters
 from lib.anthropic_client import client as ai
+from lib.cost import cost_session, record_usage
 from lib.jsonparse import parse_json_with_context
 from lib.timing import timed
 from linkd import LinkdClient
@@ -144,6 +145,7 @@ async def suggest_connections(profile: ProfileAnalysis) -> list[Connection]:
                 ),
             }],
         )
+    record_usage("connections", "claude-opus-4-8", msg.usage)
 
     raw = _strip_fences(msg.content[0].text)
     print(f"[connections] Claude raw (first 300 chars): {raw[:300]}")
@@ -158,6 +160,7 @@ async def suggest_connections(profile: ProfileAnalysis) -> list[Connection]:
 @router.post("/connections/suggest", response_model=list[Connection])
 async def connections_suggest_route(profile: ProfileAnalysis):
     try:
-        return await suggest_connections(profile)
+        with cost_session("/connections/suggest"):
+            return await suggest_connections(profile)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

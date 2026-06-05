@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from cache import get_profile_cache, get_run_cache, set_profile_cache, set_run_cache, text_cache_key
+from lib.cost import cost_session
 from lib.timing import timed, timed_call, timing_session
 from routes.internships import search_internships
 from routes.profile import analyze_profile, extract_rich_fields
@@ -149,8 +150,9 @@ def _merge_profiles(linkedin: UnifiedProfile, resume: UnifiedProfile) -> Unified
 
 @router.post("/run", response_model=RunResponse)
 async def run(req: RunRequest):
-    # timing_session prints a sorted [timing] breakdown when the request finishes.
-    with timing_session("/run"):
+    # timing_session prints a sorted [timing] breakdown when the request finishes;
+    # cost_session attributes the profile-extraction Claude spend to this /run.
+    with timing_session("/run"), cost_session("/run"):
         return await _run_impl(req)
 
 
@@ -185,8 +187,11 @@ async def _run_impl(req: RunRequest):
                     base = await analyze_profile(req)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
+            except HTTPException:
+                raise  # already a friendly mapped error (LinkdAPI 404/429/timeout) — pass through
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Profile analysis failed: {e}")
+                print(f"[run] unexpected error in analyze_profile: {e!r}")
+                raise HTTPException(status_code=500, detail="Couldn't read your profile. Please try again, or paste your profile text.")
 
             source_text = json.dumps(base.model_dump(), indent=2) if req.url else (req.text or "")[:12000]
 
@@ -224,8 +229,11 @@ async def _run_impl(req: RunRequest):
                     base = await analyze_profile(req)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
+            except HTTPException:
+                raise  # already a friendly mapped error (LinkdAPI 404/429/timeout) — pass through
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Profile analysis failed: {e}")
+                print(f"[run] unexpected error in analyze_profile: {e!r}")
+                raise HTTPException(status_code=500, detail="Couldn't read your profile. Please try again, or paste your profile text.")
 
             source_text = json.dumps(base.model_dump(), indent=2) if req.url else (req.text or "")[:12000]
 
@@ -256,10 +264,12 @@ async def _run_impl(req: RunRequest):
     # also reclaims the ~34s Opus call that was this branch's long pole.
     try:
         internships = await timed_call("internships (branch total)", search_internships(profile))
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail="Couldn't load internship matches right now. Please try again.")
 
     result = RunResponse(profile=profile, connections=[], internships=internships)
     run_cache_key = req.profile_id or (req.url if req.url else text_cache_key(req.text or ""))
