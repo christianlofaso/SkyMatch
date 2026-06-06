@@ -14,7 +14,7 @@ Client IP = first hop of `X-Forwarded-For` (deploy is behind a proxy) else the d
 
 ## Auth + per-user quota gate (`lib/auth.py`) — OPTIONAL
 
-Supabase magic-link auth, verified **locally + statelessly** (HS256 JWT signed with `SUPABASE_JWT_SECRET`; `sub` = user id). **`SUPABASE_JWT_SECRET` unset → auth disabled**: every dep returns `None`/no-ops and all routes stay anonymous (local dev unchanged). Set it → gating goes live, no code change.
+Supabase magic-link auth, verified **locally + statelessly** (`sub` = user id). `_decode` routes by the token's `alg`: modern Supabase user-session tokens are **ES256** (asymmetric, keyed by `kid`) → verified against the project **JWKS** (`{SUPABASE_URL}/auth/v1/.well-known/jwks.json`, via `PyJWKClient`, cached); legacy **HS256** (`SUPABASE_JWT_SECRET`) is a fallback that only covers the anon/service keys, not real user logins (HS256-only → every login 401s on a modern project). **Switch = `SUPABASE_URL`** (auth on if it OR the HS256 secret is set); unset both → auth disabled, every dep returns `None`/no-ops, all routes stay anonymous (local dev unchanged). Set `SUPABASE_URL` → gating goes live, no code change.
 
 One **cached** dependency does the work and the others build on it (FastAPI caches `Depends` per request, so decode+upsert runs once):
 - `optional_user(request) -> User | None` — parse the `Bearer` token; `None` when auth off or no token; **401** on a present-but-invalid/expired token; else decode (verify sig + `exp` + `aud`) → `User`, and `upsert_user` (non-fatal on DB error). 
@@ -26,7 +26,7 @@ One **cached** dependency does the work and the others build on it (FastAPI cach
 - **Standalone analyzer → one free then gate:** `POST /analyze` (full mode only) + `POST /analyze/stream` charge `quota("analysis")` (default 5/day; Opus-heavy → tighter). The hard anonymous gate is frontend-side; the spend cap backstops.
 - **Open (no auth dep):** `/run`, `/run/stream`, `/profile/*`, `/internships/search`, first `/analyze`.
 
-`cost_events.user_id` attributes spend per user (threaded via `cost_session(name, user_id=…)`). **Cloudflare Turnstile** (`lib/turnstile.verify_turnstile`, on the expensive routes) is no-op until `TURNSTILE_SECRET` is set — then it requires `X-Turnstile-Token`; siteverify network errors **fail open**, a definitive reject → **403**. Knobs: `SUPABASE_JWT_SECRET`/`_ALG`/`_AUD`, `QUOTA_MATCHER_PER_DAY`, `QUOTA_ANALYSIS_PER_DAY`, `TURNSTILE_SECRET`/`TURNSTILE_TIMEOUT_SEC`.
+`cost_events.user_id` attributes spend per user (threaded via `cost_session(name, user_id=…)`). **Cloudflare Turnstile** (`lib/turnstile.verify_turnstile`, on the expensive routes) is no-op until `TURNSTILE_SECRET` is set — then it requires `X-Turnstile-Token`; siteverify network errors **fail open**, a definitive reject → **403**. Knobs: `SUPABASE_URL` (JWKS switch) / `SUPABASE_JWKS_TIMEOUT_SEC`, `SUPABASE_JWT_SECRET` (HS256 fallback)/`_ALG`/`_AUD`, `QUOTA_MATCHER_PER_DAY`, `QUOTA_ANALYSIS_PER_DAY`, `TURNSTILE_SECRET`/`TURNSTILE_TIMEOUT_SEC`.
 
 **`routes/admin.py`** (token-guarded by `X-Admin-Token` == env `ADMIN_TOKEN`; unset/mismatch → `403`, fail closed):
 - `POST /admin/killswitch {on: bool}` → `set_flag("kill_switch", "on"|"off")`.

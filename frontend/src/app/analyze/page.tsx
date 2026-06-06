@@ -59,6 +59,12 @@ function AnalyzePageInner() {
   const runAnalysis = useCallback(
     async (input: { job_url?: string; job_text?: string }) => {
       if (!profile) return;
+      // Hard gate (defense-in-depth): an anonymous user who already used their free run must
+      // NEVER fire a request — even if the cosmetic `mustGate` hasn't settled yet (auth still
+      // resolving) or a submit was triggered before it did. Read the flag synchronously here so
+      // the gate enforces the *action*, not just the render. (Was presentational-only: the
+      // ?url= auto-submit slipped through during the authLoading window and ran behind the gate.)
+      if (authRequired && !session && hasUsedFreeAnalysis()) return;
       // An anonymous run consumes the one free analysis (gates the next one).
       if (authRequired && !session) markFreeAnalysisUsed();
       setStatus("loading");
@@ -128,17 +134,22 @@ function AnalyzePageInner() {
     [profile, authRequired, session],
   );
 
-  // Auto-submit when arriving with ?url=... once the profile has loaded (unless gated).
+  // Auto-submit when arriving with ?url=... once the profile AND auth have resolved (unless
+  // gated). The `!authLoading` guard is critical: `mustGate` is forced false while auth is
+  // loading, so without it the auto-submit would fire behind the not-yet-engaged gate. (If a
+  // gated user later signs in, this effect re-runs as mustGate flips false and the prefilled
+  // analysis auto-runs then — autoSubmittedRef keeps it one-shot.)
   useEffect(() => {
-    if (!profile || !prefilledUrl || autoSubmittedRef.current || mustGate) return;
+    if (!profile || !prefilledUrl || autoSubmittedRef.current || authLoading || mustGate) return;
     autoSubmittedRef.current = true;
     setTab("url");
     runAnalysis({ job_url: prefilledUrl });
-  }, [profile, prefilledUrl, runAnalysis, mustGate]);
+  }, [profile, prefilledUrl, runAnalysis, mustGate, authLoading]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!profile || mustGate) return;
+    // Block while auth is still resolving — mustGate is unreliable until then (see runAnalysis).
+    if (!profile || authLoading || mustGate) return;
     const input = tab === "url" ? { job_url: url.trim() } : { job_text: text.trim() };
     if (!input.job_url && !input.job_text) return;
     void runAnalysis(input);
@@ -212,6 +223,14 @@ function AnalyzePageInner() {
           </div>
         )}
 
+        {/* Auth still resolving — hold the form/gate so nothing can be submitted into the
+            race window (the bug: a click/auto-submit here ran behind a not-yet-engaged gate). */}
+        {profile && !showResults && authLoading && (
+          <div className="flex items-center gap-2 mono text-xs" style={{ color: "var(--text-secondary)" }}>
+            <Pulse /> loading…
+          </div>
+        )}
+
         {/* Sign-in gate — shown when the one free analysis has been used (anonymous) */}
         {profile && !showResults && mustGate && (
           <SignInGate
@@ -221,8 +240,8 @@ function AnalyzePageInner() {
           />
         )}
 
-        {/* Form — only shown when no results are in view and not gated */}
-        {profile && !showResults && !mustGate && (
+        {/* Form — only shown when no results are in view, auth has resolved, and not gated */}
+        {profile && !showResults && !authLoading && !mustGate && (
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             {/* Tab switcher */}
             <div className="flex border-b" style={{ borderColor: "var(--border)" }}>

@@ -7,11 +7,19 @@ rather than calling Supabase per request. The `sub` claim is the user id.
 
 OPTIONAL, like Redis/Voyage
 ---------------------------
-`SUPABASE_JWT_SECRET` is OPTIONAL. When it is unset (local dev / current setup) auth is
-DISABLED: `optional_user`/`require_user` return None, the quota deps no-op, and every
-gated route stays open exactly as before. Set the secret (prod) and gating goes live with
-zero code change. This is why `require_user` returns `User | None` — None just means
-"auth is off", not "anonymous-but-allowed-through-a-required-gate".
+Auth config is OPTIONAL. It turns ON when EITHER is set:
+  - `SUPABASE_URL`        → JWKS verification of ES256/RS256 tokens (the modern Supabase
+                            default — user session tokens are asymmetric, keyed by `kid`).
+  - `SUPABASE_JWT_SECRET` → HS256 verification against the legacy shared secret (fallback;
+                            legacy projects + self-signed test tokens).
+With NEITHER set (local dev) auth is DISABLED: `optional_user`/`require_user` return None,
+the quota deps no-op, and every gated route stays open. Set `SUPABASE_URL` (prod) and gating
+goes live with zero code change. This is why `require_user` returns `User | None` — None just
+means "auth is off", not "anonymous-but-allowed-through-a-required-gate".
+
+NOTE: HS256-only config CANNOT verify a modern project's user tokens (they're ES256) — set
+`SUPABASE_URL` for those. The shared secret correctly verifies the anon/service API keys, so
+a "secret matches the anon key" check passes even when real logins would 401.
 
 Dependency shapes (attach per-route in the route decorators)
 ------------------------------------------------------------
@@ -37,6 +45,7 @@ import asyncio
 from dataclasses import dataclass
 
 import jwt
+from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, Request
 
 from cache import upsert_user, incr_usage
@@ -45,6 +54,28 @@ from cache import upsert_user, incr_usage
 _SECRET = os.getenv("SUPABASE_JWT_SECRET", "").strip()
 _ALG = os.getenv("SUPABASE_JWT_ALG", "HS256")
 _AUD = os.getenv("SUPABASE_JWT_AUD", "authenticated")
+
+# Modern Supabase projects sign USER SESSION tokens with asymmetric JWT signing keys
+# (ES256, keyed by `kid`), NOT the legacy HS256 shared secret — the shared secret only
+# signs the anon/service API keys. So we verify against the project's JWKS (public keys),
+# selecting the key by `kid`, and keep the HS256 shared-secret path as a fallback for
+# legacy projects + self-signed test tokens. JWKS URL is derived from SUPABASE_URL.
+_SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+_JWKS_URL = f"{_SUPABASE_URL}/auth/v1/.well-known/jwks.json" if _SUPABASE_URL else ""
+_ISSUER = f"{_SUPABASE_URL}/auth/v1" if _SUPABASE_URL else None
+_JWKS_TIMEOUT = int(os.getenv("SUPABASE_JWKS_TIMEOUT_SEC", "10"))
+_ASYM_ALGS = ("ES256", "RS256")
+
+# Lazy JWKS client singleton — caches the fetched key set (refetched on an unknown kid /
+# after `lifespan`), so only the first verify after boot (and post-rotation) hits the network.
+_jwks_client: PyJWKClient | None = None
+
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(_JWKS_URL, timeout=_JWKS_TIMEOUT)
+    return _jwks_client
 
 # Per-user daily quotas (UTC day). Env-tunable.
 QUOTA_LIMITS = {
@@ -61,8 +92,9 @@ class User:
 
 
 def auth_enabled() -> bool:
-    """True if a JWT secret is configured. When False, every auth dep degrades to anonymous."""
-    return bool(_SECRET)
+    """True if EITHER the JWKS URL (asymmetric, the modern Supabase default) OR the HS256
+    shared secret is configured. When False, every auth dep degrades to anonymous."""
+    return bool(_JWKS_URL or _SECRET)
 
 
 def _utc_day() -> str:
@@ -79,12 +111,29 @@ def _bearer_token(request: Request) -> str | None:
 
 
 def _decode(token: str) -> User:
-    """Verify + decode a Supabase JWT. Raises jwt.PyJWTError on any failure (bad signature,
-    expired, wrong audience, missing required claim)."""
-    payload = jwt.decode(
-        token, _SECRET, algorithms=[_ALG], audience=_AUD,
-        options={"require": ["exp", "sub"]},
-    )
+    """Verify + decode a Supabase JWT. Routes by the token's own `alg` header: ES256/RS256 →
+    verify against the project JWKS (public key by `kid`), HS256 → verify against the shared
+    secret. Raises jwt.PyJWTError on any failure (bad signature, expired, wrong audience/issuer,
+    missing required claim, unknown kid, JWKS fetch error). Blocking (JWKS fetch hits the network
+    on a cache miss) — call via asyncio.to_thread."""
+    alg = jwt.get_unverified_header(token).get("alg", "")
+    if alg in _ASYM_ALGS:
+        if not _JWKS_URL:
+            raise jwt.InvalidAlgorithmError(
+                f"token alg={alg} requires JWKS verification but SUPABASE_URL is not set")
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token, signing_key.key, algorithms=list(_ASYM_ALGS), audience=_AUD,
+            issuer=_ISSUER, options={"require": ["exp", "sub"]},
+        )
+    else:
+        if not _SECRET:
+            raise jwt.InvalidAlgorithmError(
+                f"token alg={alg} requires the HS256 shared secret but SUPABASE_JWT_SECRET is not set")
+        payload = jwt.decode(
+            token, _SECRET, algorithms=[_ALG], audience=_AUD,
+            options={"require": ["exp", "sub"]},
+        )
     return User(id=payload["sub"], email=payload.get("email"), role=payload.get("role"))
 
 
@@ -97,8 +146,14 @@ async def optional_user(request: Request) -> User | None:
     if not token:
         return None
     try:
-        user = _decode(token)
-    except jwt.PyJWTError:
+        # to_thread: _decode is blocking (JWKS network fetch on a cache miss).
+        user = await asyncio.to_thread(_decode, token)
+    except jwt.PyJWTError as e:
+        # Log the SPECIFIC reason — the client only ever sees the generic message, so an
+        # otherwise-opaque 401 (expired vs bad-signature vs wrong-aud vs immature/clock-skew)
+        # is undiagnosable without this. ExpiredSignatureError → refresh/expiry; ImmatureSignature
+        # /iat-in-future → clock skew; InvalidSignatureError → wrong secret; InvalidAudienceError → aud.
+        print(f"[auth] JWT verify failed: {type(e).__name__}: {e}")
         raise HTTPException(status_code=401, detail="Invalid or expired session. Please sign in again.")
     # Upsert is a blocking DB call → off the event loop. Failure here must not 401 a valid
     # token (identity is verified already), so swallow + log.

@@ -21,7 +21,7 @@ Vercel (frontend)            Railway (compute + Redis)            Supabase (Post
 | Where | Action |
 |-------|--------|
 | **Domain registrar** | Own a domain. Decide `app.<domain>` (frontend) + `api.<domain>` (backend). |
-| **Supabase** | Create **two** projects: `pathfinder-staging`, `pathfinder-prod` (co-locate region with Railway). **Pro tier** for daily backups / PITR. In each: enable **Email (magic link)** auth; add the redirect URL `https://app.<domain>` (+ the staging URL). Grab per project: project URL, `anon` key, `service_role` key, **JWT secret**. |
+| **Supabase** | Create **two** projects: `pathfinder-staging`, `pathfinder-prod` (co-locate region with Railway). **Pro tier** for daily backups / PITR. In each: enable **Email (magic link)** auth; add the redirect URL `https://app.<domain>` (+ the staging URL). Grab per project: **project URL** (the backend auth switch — JWKS-verifies the project's ES256 user tokens), `anon` key, `service_role` key, and the legacy `JWT secret` (HS256 fallback only). |
 | **Railway** | Create a project with **2 environments** (staging, prod). In each, add **3 services** (see §2) + a **Redis** plugin. |
 | **Vercel** | Import the repo; root directory `frontend/`. Add the custom domain `app.<domain>`. |
 | **Cloudflare** | Proxy `api.<domain>` → Railway. Turnstile: create a widget → **site key** (frontend) + **secret key** (backend). |
@@ -71,7 +71,9 @@ broken; still, set Redis).
 - `ADMIN_TOKEN` — for `/admin/*`.
 
 **Auth + abuse (turns the gate ON — see [routes.md](routes.md#auth--per-user-quota-gate-libauthpy--optional)):**
-- `SUPABASE_JWT_SECRET` (**backend-only**), optional `SUPABASE_JWT_AUD`/`_ALG`.
+- `SUPABASE_URL` (**backend-only**) — the real switch: enables JWKS verification of the
+  project's ES256 user-session tokens. (`SUPABASE_JWT_SECRET` is a legacy HS256 *fallback*
+  that verifies the anon/service keys but NOT modern user logins.) Optional `SUPABASE_JWT_AUD`/`_ALG`/`SUPABASE_JWKS_TIMEOUT_SEC`.
 - `QUOTA_MATCHER_PER_DAY=20`, `QUOTA_ANALYSIS_PER_DAY=5`.
 - `TURNSTILE_SECRET` (**backend-only**).
 
@@ -85,7 +87,7 @@ broken; still, set Redis).
 - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the `anon` key is the only
   Supabase secret the client may hold).
 - `NEXT_PUBLIC_AUTH_REQUIRED=true` — flip the gates ON in prod (default off = sign-in
-  available but not enforced). Set together with the backend `SUPABASE_JWT_SECRET`.
+  available but not enforced). Set together with the backend `SUPABASE_URL`.
 - `NEXT_PUBLIC_TURNSTILE_SITE_KEY`.
 
 > **CRITICAL:** Supabase **`service_role` key + JWT secret are backend-only**. The browser
