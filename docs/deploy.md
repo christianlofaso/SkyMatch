@@ -80,7 +80,9 @@ broken; still, set Redis).
 **Observability:** `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE=0.1`, `ENVIRONMENT=staging|production`.
 
 **Tuning (optional, code defaults shown in `.env.example`):** `SONNET_MAX_CONCURRENCY`,
-`DB_POOL_MAX`, `RATE_LIMIT_*`, `SERVE_MAX_AGE_HOURS`, etc.
+`DB_POOL_MAX`, `RATE_LIMIT_*`, `SERVE_MAX_AGE_HOURS`, `WORKER_SPEND_CAP_USD_DAILY`
+(ingestion's own spend bucket — excluded from the user kill switch; set it on the **worker**
+service), etc.
 
 **Frontend (Vercel, per environment):**
 - `NEXT_PUBLIC_API_URL=https://api.<domain>`
@@ -122,5 +124,8 @@ broken; still, set Redis).
 ## 6. Known accepted risks
 
 - **LinkedIn / LinkdAPI scraping** ToS exposure — launched as-is (explicit call; see brainstorm Q15).
-- **Worker LLM spend** (Haiku/Voyage parse pass) is not yet on a separate cost bucket — it
-  currently lands in `cost_events`. TODO before heavy ingest cadence (brainstorm Q8).
+- **Worker LLM spend isolation (M5) — DONE.** The worker's Haiku parse-pass spend is tracked
+  in `cost_events` under a `worker:ingest` `cost_session`, which the user-facing kill switch
+  (`sum_spend_since`) **excludes** — ingestion can never trip the user 503. It has its own
+  soft cap (`WORKER_SPEND_CAP_USD_DAILY`, default in `.env.example` = $5; 0 disables),
+  enforced inside `parse_pass()`. Set it per Railway environment.

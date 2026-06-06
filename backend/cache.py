@@ -242,12 +242,30 @@ def query_cost_events(since: int) -> list[dict]:
 
 
 def sum_spend_since(since: int) -> float:
-    """Total real Claude spend (USD) since `since` (Unix ts). Only kind='call' rows
-    carry spend; 'hit' rows are savings. Used by the spend-cap kill switch."""
+    """Total real USER-FACING Claude spend (USD) since `since` (Unix ts). Only kind='call'
+    rows carry spend; 'hit' rows are savings. Used by the spend-cap kill switch — which
+    must NOT be tripped by background ingestion, so worker-tagged rows (session LIKE
+    'worker:%') are EXCLUDED here (they have their own cap; see sum_worker_spend_since).
+    A NULL session is request-path spend (a direct call with no cost_session) → counted."""
     with get_db() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(usd), 0.0) AS total FROM cost_events "
-            "WHERE kind = 'call' AND created_at >= %s",
+            "WHERE kind = 'call' AND created_at >= %s "
+            "AND (session IS NULL OR session NOT LIKE 'worker:%%')",
+            (since,),
+        ).fetchone()
+    return float(row["total"]) if row else 0.0
+
+
+def sum_worker_spend_since(since: int) -> float:
+    """Total background-WORKER Claude spend (USD) since `since` (Unix ts) — the inverse of
+    sum_spend_since's exclusion. Sums kind='call' rows tagged with a 'worker:%' cost_session
+    (the worker's Haiku parse pass). Used by the worker's own soft spend cap so ingestion
+    self-limits independently of the user-facing kill switch."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(usd), 0.0) AS total FROM cost_events "
+            "WHERE kind = 'call' AND created_at >= %s AND session LIKE 'worker:%%'",
             (since,),
         ).fetchone()
     return float(row["total"]) if row else 0.0

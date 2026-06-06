@@ -46,12 +46,14 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 import asyncio  # noqa: E402
+import time  # noqa: E402
 
 from cache import (  # noqa: E402
     ONE_DAY, count_listings_by_niche_bucket, get_listings_to_embed, get_listings_to_parse,
     get_rotation_metros, init_db, mark_listing_dead, prune_stale_listings,
-    set_listing_embedding, upsert_listing,
+    set_listing_embedding, sum_worker_spend_since, upsert_listing,
 )
+from lib.cost import cost_session  # noqa: E402
 from config.niches import (  # noqa: E402
     NATIONAL_FIELDS, NATIONAL_NICHE_KEY, NationalField,
     REACH_ATS_SLUGS, REACH_NICHE_KEY,
@@ -70,6 +72,18 @@ from schemas import ProfileAnalysis  # noqa: E402
 STALE_MAX_AGE = 14 * ONE_DAY
 _ENRICH_CONCURRENCY = 8       # mirror the live pipeline's enrichment semaphore
 _VALIDATE_CONCURRENCY = 10    # mirror the live pipeline's validation semaphore
+
+# Worker soft spend cap (M5). The parse pass's Haiku calls are tagged with the
+# 'worker:ingest' cost_session, which sum_spend_since() EXCLUDES — so ingestion can never
+# trip the user-facing kill switch. This is the worker's OWN budget bucket: it stops
+# parsing (leaving rows unparsed for the next run) once its rolling-window spend reaches
+# the cap. 0 = disabled (code default; .env.example sets a real ceiling). Mirrors the
+# SPEND_CAP_USD_DAILY / SPEND_CAP_WINDOW_SEC pattern in lib/guard.py.
+WORKER_SPEND_CAP_USD_DAILY = float(os.getenv("WORKER_SPEND_CAP_USD_DAILY", "0") or "0")
+WORKER_SPEND_CAP_WINDOW_SEC = int(os.getenv("WORKER_SPEND_CAP_WINDOW_SEC", "86400"))
+# Rows are parsed in chunks of this size so the cap is re-checked mid-pass (not just before
+# it) — bounds a single huge first-run backfill, not just runaway across runs.
+_PARSE_CAP_CHUNK = 64
 
 
 def _field_to_profile(nf: NationalField) -> ProfileAnalysis:
@@ -206,12 +220,46 @@ async def parse_pass() -> None:
     print(f"[ingest] parse pass: {len(rows)} unparsed listings "
           f"(haiku={'on' if os.getenv('ANTHROPIC_API_KEY') else 'OFF'}, "
           f"voyage={'on' if embeddings.is_available() else 'OFF'})")
+
+    cap = WORKER_SPEND_CAP_USD_DAILY
+    window = WORKER_SPEND_CAP_WINDOW_SEC
+
+    def _spent() -> float:
+        # Worker spend over the rolling window (prior runs + this run so far — record_usage
+        # persists each call immediately, so a mid-pass read sees the running total).
+        return sum_worker_spend_since(int(time.time()) - window)
+
+    # Pre-gate: if the worker has already spent its budget this window, skip entirely.
+    if cap > 0:
+        spent = await asyncio.to_thread(_spent)
+        if spent >= cap:
+            print(f"[ingest] parse pass: worker spend cap reached "
+                  f"(~${spent:.2f}/${cap:.2f} in {window // 3600}h) — skipping this run")
+            return
+
     # Parse + (SPA) company-resolve + embed + persist — shared with the request-time local
     # live-fetch (lib/precompute.parse_and_embed_rows). firecrawl_company=True: the worker
     # CAN afford the bounded SPA company render for new wellfound/workatastartup rows.
-    stats = await parse_and_embed_rows(rows, firecrawl_company=True)
-    print(f"[ingest] parse pass: parsed {stats['parsed']}, embedded {stats['embedded']}, "
-          f"haiku-failed {stats['haiku_failed']}")
+    # All Haiku calls inside are tagged 'worker:ingest' (excluded from the user kill switch).
+    totals = {"parsed": 0, "embedded": 0, "haiku_failed": 0}
+    with cost_session("worker:ingest"):
+        # When the cap is off, parse in one call (unchanged behavior); when on, chunk so the
+        # cap is enforced mid-pass.
+        chunk = _PARSE_CAP_CHUNK if cap > 0 else len(rows)
+        for i in range(0, len(rows), chunk):
+            if cap > 0:
+                spent = await asyncio.to_thread(_spent)
+                if spent >= cap:
+                    remaining = len(rows) - i
+                    print(f"[ingest] parse pass: worker spend cap hit "
+                          f"(~${spent:.2f}/${cap:.2f}) — {remaining} rows left "
+                          f"unparsed for next run")
+                    break
+            stats = await parse_and_embed_rows(rows[i:i + chunk], firecrawl_company=True)
+            for k in totals:
+                totals[k] += stats[k]
+    print(f"[ingest] parse pass: parsed {totals['parsed']}, embedded {totals['embedded']}, "
+          f"haiku-failed {totals['haiku_failed']}")
 
 
 async def embed_backfill_pass() -> None:

@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from config.models import MODEL_QUICK
 from lib import firecrawl
 from lib.anthropic_client import client as ai
+from lib.cost import record_usage
 from lib.jsonparse import parse_json_with_context, strip_fences
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -212,6 +213,11 @@ def parse_listing_sync(listing: dict) -> dict | None:
             system=_PARSE_SYSTEM,
             messages=[{"role": "user", "content": user}],
         )
+        # Record spend the moment the call succeeds (before JSON parsing — we paid for the
+        # tokens regardless). Tagged by the active cost_session: 'worker:ingest' for the
+        # worker parse pass (excluded from the user-facing kill switch + capped separately),
+        # the request session (/run, /internships/...) for the local live-fetch fallback.
+        record_usage("listing-parse", MODEL_QUICK, msg.usage)
         raw = strip_fences(msg.content[0].text)
         parsed = parse_json_with_context(raw, "listing_parse")
         if isinstance(parsed, list):
