@@ -14,6 +14,21 @@
 - `InternshipCard` — title, company, fit_explanation, reach_gap, Apply link, **plus a `JobAnalysisBadge` slot top-right** (analyzing pulse / score+verdict pill clickable to full / retry on error). `fit_explanation`/`reach_gap` arrive **lazily** via the `annotation` prop (`CardAnnotationState`): a skeleton shows in the "Why you fit" block while it streams, then the text; prefers the streamed annotation, falls back to whatever shipped on the feed.
 - `BucketSection` — bucket header + grid of InternshipCards; sorts indices by `sort` prop (`fit` or `recency`)
 
+## Auth + gating (Supabase magic-link)
+
+OPTIONAL, two-switch design mirroring the backend (`lib/auth.py`):
+- **`authConfigured()`** (`lib/supabase.ts`) = `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` present → the client + sign-in UI exist.
+- **`authRequired()`** = `NEXT_PUBLIC_AUTH_REQUIRED === "true"` → the **gates enforce**. Default off, so sign-in is available but not mandatory and the current flow is unchanged (a signed-in session's token is still attached). Flip it on **with** the backend `SUPABASE_JWT_SECRET`.
+
+- **`lib/supabase.ts`** — singleton browser client (`null` when unconfigured) + the two switches.
+- **`lib/auth-context.tsx`** — `AuthProvider` (wraps `{children}` in `layout.tsx`) + `useAuth()` → `{ session, user, loading, authConfigured, authRequired, signInWithOtp, signOut }` (via `getSession` + `onAuthStateChange`). Renders a **floating top-right chip** (sign in popover / email + sign out) when configured, and mounts the global `<TurnstileWidget/>`.
+- **`components/SignInGate.tsx`** — reusable email→magic-link panel (`idle/sending/sent/error`); `signInWithOtp` uses `emailRedirectTo: window.location.href` so the link returns the user in place. **Supabase dashboard must allowlist the redirect origin** (Authentication → URL Configuration) or the link won't return.
+- **The two-rule gate (frontend side):**
+  - **Results (`/results/[id]`)** — *teaser*: listings render, but when `authRequired && !session` the batch-scoring + annotate effects **don't fire**; a `<SignInGate>` banner shows and cards get `gated` → a "🔒 sign in" pill instead of a score. Effects re-run when `session` appears (it's in their deps).
+  - **Analyzer (`/analyze`)** — *one free, then gate*: `hasUsedFreeAnalysis()`/`markFreeAnalysisUsed()` (`lib/storage.ts`, `pf:free_analysis_used`); the 2nd anonymous run shows `<SignInGate>`.
+- **Token injection** — `lib/api.ts` `gatedHeaders()` = `Authorization: Bearer <session token>` + `X-Turnstile-Token` (see below), merged into the **4 gated fetches** (`analyzeJob`, `analyzeBatch`, `annotateFit`, `analyzeJobStream`); the open fetches (`runPathfinder*`, `parseResume`) are untouched. A `401` maps to a friendly "session expired — sign in again".
+- **Cloudflare Turnstile** — `components/TurnstileWidget.tsx` (one invisible widget, mounted globally by `AuthProvider`) + `lib/turnstile-client.ts` (`getTurnstileToken()`: serialized `reset()`+`getResponsePromise()`, 8s timeout → null). The backend requires `X-Turnstile-Token` whenever its `TURNSTILE_SECRET` is set (independent of sign-in), so it's attached to every gated call. No-ops without `NEXT_PUBLIC_TURNSTILE_SITE_KEY`.
+
 ## Constants and shared helpers
 - `lib/constants.ts` is the canonical source for `VERDICT_LABEL` ("Apply Now" / "Worth Prepping" / "Probably Not a Fit"), `VERDICT_COLOR`, and `scoreColor()`. Never inline verdict labels in components.
 - `lib/api.ts` exports four ndjson async generators over `Content-Type: application/x-ndjson` — `analyzeBatch(profile, jobs, signal?)`, `annotateFit(profile, jobs, signal?)`, `analyzeJobStream(profile, {job_url|job_text}, signal?)`, and `runPathfinderStream({url?,text?,profile_id?}, signal?)`. All share one pattern: `getReader()` + `TextDecoder({stream:true})` + line split, each yielded line schema-validated (`BatchEnvelopeSchema` / `AnnotateEnvelopeSchema` / `AnalyzeStreamEnvelopeSchema` / `RunStreamEnvelopeSchema`). `annotateFit` jobs are `{url, bucket}`. The single-shot `runPathfinder` + `analyzeJob` stay for non-streaming callers (e.g. quick mode, detail-page cache re-reads); a thrown error (non-200 before the stream starts) carries the server's friendly message.

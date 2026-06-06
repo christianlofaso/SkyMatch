@@ -287,6 +287,25 @@ export function getAnalysis(analysisId: string): AnalysisResponse | null {
   }
 }
 
+// ── Free-analysis gate (analyzer "one free, then sign in") ────────────────────
+// Best-effort, per-browser (the backend spend cap + per-user quota are the real limits).
+
+const FREE_ANALYSIS_KEY = "pf:free_analysis_used";
+
+export function hasUsedFreeAnalysis(): boolean {
+  const store = ls();
+  return !!store && store.getItem(FREE_ANALYSIS_KEY) === "1";
+}
+
+export function markFreeAnalysisUsed(): void {
+  const store = ls();
+  try {
+    store?.setItem(FREE_ANALYSIS_KEY, "1");
+  } catch {
+    // ignore (privacy mode / quota) — gate just stays open
+  }
+}
+
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
 const rtf = typeof Intl !== "undefined" && "RelativeTimeFormat" in Intl

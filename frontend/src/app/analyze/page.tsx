@@ -11,7 +11,9 @@ import {
 } from "@/types/pathfinder";
 import VerdictCard from "@/components/VerdictCard";
 import BreakdownView from "@/components/BreakdownView";
-import { getRun, latestRunId, saveAnalysis } from "@/lib/storage";
+import { SignInGate } from "@/components/SignInGate";
+import { useAuth } from "@/lib/auth-context";
+import { getRun, latestRunId, saveAnalysis, hasUsedFreeAnalysis, markFreeAnalysisUsed } from "@/lib/storage";
 
 type Tab = "url" | "paste";
 // "loading" = waiting for the verdict (fetch+extract+match); "streaming" = verdict shown,
@@ -43,6 +45,11 @@ function AnalyzePageInner() {
   const [showBreakdown, setShowBreakdown] = useState(false);
   const autoSubmittedRef = useRef(false);
 
+  // Auth gate: standalone analyzer = "one free, then sign in". Anonymous users get one run;
+  // the second is gated (best-effort localStorage flag — backend's 5/day quota is the real cap).
+  const { session, authRequired, loading: authLoading, signInWithOtp } = useAuth();
+  const mustGate = authRequired && !session && !authLoading && hasUsedFreeAnalysis();
+
   // On mount: pick up the profile from the most recent saved run.
   useEffect(() => {
     const id = latestRunId();
@@ -52,6 +59,8 @@ function AnalyzePageInner() {
   const runAnalysis = useCallback(
     async (input: { job_url?: string; job_text?: string }) => {
       if (!profile) return;
+      // An anonymous run consumes the one free analysis (gates the next one).
+      if (authRequired && !session) markFreeAnalysisUsed();
       setStatus("loading");
       setErrorMsg("");
       setResult(null);
@@ -116,20 +125,20 @@ function AnalyzePageInner() {
         setStatus("error");
       }
     },
-    [profile],
+    [profile, authRequired, session],
   );
 
-  // Auto-submit when arriving with ?url=... once the profile has loaded.
+  // Auto-submit when arriving with ?url=... once the profile has loaded (unless gated).
   useEffect(() => {
-    if (!profile || !prefilledUrl || autoSubmittedRef.current) return;
+    if (!profile || !prefilledUrl || autoSubmittedRef.current || mustGate) return;
     autoSubmittedRef.current = true;
     setTab("url");
     runAnalysis({ job_url: prefilledUrl });
-  }, [profile, prefilledUrl, runAnalysis]);
+  }, [profile, prefilledUrl, runAnalysis, mustGate]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!profile) return;
+    if (!profile || mustGate) return;
     const input = tab === "url" ? { job_url: url.trim() } : { job_text: text.trim() };
     if (!input.job_url && !input.job_text) return;
     void runAnalysis(input);
@@ -203,8 +212,17 @@ function AnalyzePageInner() {
           </div>
         )}
 
-        {/* Form — only shown when no results are in view */}
-        {profile && !showResults && (
+        {/* Sign-in gate — shown when the one free analysis has been used (anonymous) */}
+        {profile && !showResults && mustGate && (
+          <SignInGate
+            onSubmit={signInWithOtp}
+            title="Sign in to keep analyzing"
+            subtitle="You've used your free analysis. Sign in (one-tap magic link) to run more."
+          />
+        )}
+
+        {/* Form — only shown when no results are in view and not gated */}
+        {profile && !showResults && !mustGate && (
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             {/* Tab switcher */}
             <div className="flex border-b" style={{ borderColor: "var(--border)" }}>

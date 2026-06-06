@@ -15,9 +15,44 @@ import {
   type RunStreamEnvelope,
 } from "@/types/pathfinder";
 
+import { supabase } from "@/lib/supabase";
+import { getTurnstileToken } from "@/lib/turnstile-client";
+
 type AnnotateJob = { url: string; bucket: "local" | "big_tech" | "startup" | "reach" };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+/**
+ * Authorization header for the GATED routes. Returns the current Supabase session's bearer
+ * token, or {} when not signed in / auth unconfigured (the backend treats that as anonymous
+ * — and only 401s when its own gate is enabled). Attached to /analyze, /analyze/stream,
+ * /analyze/batch, /internships/annotate; the open routes (/run*, /profile*) don't use it.
+ */
+async function authHeaders(): Promise<Record<string, string>> {
+  if (!supabase) return {};
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * Headers for a GATED route: the bearer token (above) PLUS a fresh Cloudflare Turnstile
+ * token (X-Turnstile-Token) when Turnstile is configured. The backend requires the Turnstile
+ * token whenever its TURNSTILE_SECRET is set — independent of sign-in — so this is attached
+ * to every gated call, signed in or not.
+ */
+async function gatedHeaders(): Promise<Record<string, string>> {
+  const headers = await authHeaders();
+  const turnstile = await getTurnstileToken();
+  if (turnstile) headers["X-Turnstile-Token"] = turnstile;
+  return headers;
+}
+
+/** Friendly error for an auth failure on a gated route — pages prompt re-sign-in. */
+function authError(status: number): Error | null {
+  if (status === 401) return new Error("Your session has expired — please sign in again.");
+  return null;
+}
 
 export async function parseResume(file: File): Promise<{ profile_id: string; profile: UnifiedProfile }> {
   const form = new FormData();
@@ -76,11 +111,13 @@ export async function analyzeJob(
 ): Promise<AnalysisResponse> {
   const res = await fetch(`${API_BASE}/analyze`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await gatedHeaders()) },
     body: JSON.stringify({ profile, mode, ...input }),
   });
 
   if (!res.ok) {
+    const authErr = authError(res.status);
+    if (authErr) throw authErr;
     const err = await res.json().catch(() => ({ detail: "Unknown error" }));
     throw new Error(err.detail ?? `HTTP ${res.status}`);
   }
@@ -104,12 +141,14 @@ export async function* analyzeBatch(
 ): AsyncGenerator<BatchEnvelope, void, void> {
   const res = await fetch(`${API_BASE}/analyze/batch`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await gatedHeaders()) },
     body: JSON.stringify({ profile, jobs }),
     signal,
   });
 
   if (!res.ok || !res.body) {
+    const authErr = authError(res.status);
+    if (authErr) throw authErr;
     const err = await res.json().catch(() => ({ detail: "Unknown error" }));
     throw new Error(err.detail ?? `HTTP ${res.status}`);
   }
@@ -150,12 +189,14 @@ export async function* annotateFit(
 ): AsyncGenerator<AnnotateEnvelope, void, void> {
   const res = await fetch(`${API_BASE}/internships/annotate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await gatedHeaders()) },
     body: JSON.stringify({ profile, jobs }),
     signal,
   });
 
   if (!res.ok || !res.body) {
+    const authErr = authError(res.status);
+    if (authErr) throw authErr;
     const err = await res.json().catch(() => ({ detail: "Unknown error" }));
     throw new Error(err.detail ?? `HTTP ${res.status}`);
   }
@@ -198,12 +239,14 @@ export async function* analyzeJobStream(
 ): AsyncGenerator<AnalyzeStreamEnvelope, void, void> {
   const res = await fetch(`${API_BASE}/analyze/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await gatedHeaders()) },
     body: JSON.stringify({ profile, mode: "full", ...input }),
     signal,
   });
 
   if (!res.ok || !res.body) {
+    const authErr = authError(res.status);
+    if (authErr) throw authErr;
     const err = await res.json().catch(() => ({ detail: "Unknown error" }));
     throw new Error(err.detail ?? `HTTP ${res.status}`);
   }

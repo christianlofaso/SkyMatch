@@ -16,6 +16,7 @@ interface Props {
   analyses?: Record<number, CardAnalysisState>;  // keyed by original index in `internships`
   annotations?: Record<number, CardAnnotationState>;  // keyed by original index in `internships`
   sort?: SortMode;
+  gated?: boolean;  // auth gate active → cards show a locked score pill, no LLM fired
   onRetry?: (origIndex: number) => void;
   onRequestAnnotation?: (origIndex: number) => void;
 }
@@ -42,7 +43,7 @@ function postedAt(s: CardAnalysisState | undefined): string {
   return (s?.status === "ok" && s.data.job_summary.posted_at) || "";
 }
 
-export function BucketSection({ bucket, internships, analyses, annotations, sort = "fit", onRetry, onRequestAnnotation }: Props) {
+export function BucketSection({ bucket, internships, analyses, annotations, sort = "fit", gated, onRetry, onRequestAnnotation }: Props) {
   const label = BUCKET_LABELS[bucket] ?? bucket;
   const order = sortIndices(internships, analyses, sort);
 
@@ -70,6 +71,7 @@ export function BucketSection({ bucket, internships, analyses, annotations, sort
               internship={internships[i]}
               analysis={analyses?.[i]}
               annotation={annotations?.[i]}
+              gated={gated}
               onRetry={onRetry ? () => onRetry(i) : undefined}
               onRequestAnnotation={onRequestAnnotation ? () => onRequestAnnotation(i) : undefined}
             />

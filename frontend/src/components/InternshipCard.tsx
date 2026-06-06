@@ -18,12 +18,14 @@ interface Props {
   internship: Internship;
   analysis?: CardAnalysisState;
   annotation?: CardAnnotationState;
+  // Auth gate active → show a locked score pill + "sign in" hint, fire no LLM calls.
+  gated?: boolean;
   onRetry?: () => void;
   // Lazy trigger: called on the first expand of an un-annotated card to fetch its "why you fit".
   onRequestAnnotation?: () => void;
 }
 
-export function InternshipCard({ internship, analysis, annotation, onRetry, onRequestAnnotation }: Props) {
+export function InternshipCard({ internship, analysis, annotation, gated, onRetry, onRequestAnnotation }: Props) {
   const [expanded, setExpanded] = useState(false);
   // Prefer the freshly-streamed annotation; fall back to whatever shipped on the feed (usually "").
   const fit =
@@ -44,7 +46,8 @@ export function InternshipCard({ internship, analysis, annotation, onRetry, onRe
   function toggle() {
     const next = !expanded;
     setExpanded(next);
-    if (next && annotation?.status !== "ok" && !internship.fit_explanation) {
+    // Gated: still expandable (company description), but no annotation fetch until signed in.
+    if (next && !gated && annotation?.status !== "ok" && !internship.fit_explanation) {
       onRequestAnnotation?.();
     }
   }
@@ -74,11 +77,21 @@ export function InternshipCard({ internship, analysis, annotation, onRetry, onRe
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {internship.application_url && (
-            // stopPropagation: clicking the badge opens full analysis / retries, never toggles.
-            <span onClick={(e) => e.stopPropagation()}>
-              <JobAnalysisBadge analysis={analysis} onRetry={onRetry} onClick={openFullAnalysis} />
+          {gated ? (
+            <span
+              className="mono text-[10px] px-2 py-1 border shrink-0 select-none"
+              style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}
+              title="Sign in to reveal your match score"
+            >
+              🔒 sign in
             </span>
+          ) : (
+            internship.application_url && (
+              // stopPropagation: clicking the badge opens full analysis / retries, never toggles.
+              <span onClick={(e) => e.stopPropagation()}>
+                <JobAnalysisBadge analysis={analysis} onRetry={onRetry} onClick={openFullAnalysis} />
+              </span>
+            )
           )}
           <span
             className="mono text-xs select-none"
@@ -101,6 +114,13 @@ export function InternshipCard({ internship, analysis, annotation, onRetry, onRe
           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
             {internship.company_description}
           </p>
+
+          {/* Gated: the "why you fit" reasoning is behind sign-in. */}
+          {gated && (
+            <p className="mono text-[10px] uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>
+              🔒 Sign in to reveal why you fit
+            </p>
+          )}
 
           {/* Why you fit — fetched lazily on expand by /internships/annotate. Only rendered while
               loading or once text arrives, so a failed/empty annotation doesn't leave a blank label. */}

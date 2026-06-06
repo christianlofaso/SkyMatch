@@ -84,6 +84,8 @@ broken; still, set Redis).
 - `NEXT_PUBLIC_API_URL=https://api.<domain>`
 - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the `anon` key is the only
   Supabase secret the client may hold).
+- `NEXT_PUBLIC_AUTH_REQUIRED=true` — flip the gates ON in prod (default off = sign-in
+  available but not enforced). Set together with the backend `SUPABASE_JWT_SECRET`.
 - `NEXT_PUBLIC_TURNSTILE_SITE_KEY`.
 
 > **CRITICAL:** Supabase **`service_role` key + JWT secret are backend-only**. The browser

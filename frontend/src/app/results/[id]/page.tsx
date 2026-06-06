@@ -8,6 +8,8 @@ import { ProfileCard } from "@/components/ProfileCard";
 import { BucketSection, type SortMode } from "@/components/BucketSection";
 import type { CardAnalysisState } from "@/components/InternshipCard";
 import { analyzeBatch, annotateFit } from "@/lib/api";
+import { SignInGate } from "@/components/SignInGate";
+import { useAuth } from "@/lib/auth-context";
 import {
   getRun,
   loadAnalyses,
@@ -58,6 +60,13 @@ export default function ResultsPage() {
   );
   const [sort, setSort] = useState<SortMode>("fit");
   const abortRef = useRef<AbortController | null>(null);
+
+  // Auth gate: the results "reveal" (match scores via /analyze/batch + "why you fit" via
+  // /internships/annotate) requires sign-in when enforcement is on. Listings still render as
+  // a teaser; only the LLM-fired scores/annotations are gated. needsSignIn stays true while
+  // the session is still loading (session === null), so we never fire before we know.
+  const { session, authRequired, loading: authLoading, signInWithOtp } = useAuth();
+  const needsSignIn = authRequired && !session;
 
   useEffect(() => {
     const run = getRun(id);
@@ -173,6 +182,7 @@ export default function ResultsPage() {
   // If every slot is cached → no skeleton, no /analyze/batch call.
   useEffect(() => {
     if (!data || jobs.length === 0) return;
+    if (needsSignIn) return; // gated reveal — don't fire scoring until signed in
 
     // Re-read storage to determine coverage (state may already be hydrated).
     const stored = loadAnalyses(id);
@@ -274,7 +284,7 @@ export default function ResultsPage() {
     })();
 
     return () => controller.abort();
-  }, [id, data, jobs, jobSlots, maybeAutoRetry]);
+  }, [id, data, jobs, jobSlots, maybeAutoRetry, needsSignIn]);
 
   // Deferred "why you fit" is now LAZY: nothing fires on page load. Expanding a card calls
   // annotateUrl for that role's url (the feed ships an empty fit_explanation). We still annotate
@@ -298,6 +308,7 @@ export default function ResultsPage() {
   const annotateUrl = useCallback(
     (url: string | null | undefined) => {
       if (!data || !url) return;
+      if (needsSignIn) return; // gated reveal — no annotation until signed in
       if (annotateRequestedRef.current.has(url)) return; // in-flight or already done
 
       // Collect every slot sharing this url (same loop shape as scoreUrl).
@@ -373,7 +384,7 @@ export default function ResultsPage() {
         }
       })();
     },
-    [data, id, annotations],
+    [data, id, annotations, needsSignIn],
   );
 
   if (error) {
@@ -466,6 +477,13 @@ export default function ResultsPage() {
               ))}
             </div>
           </div>
+          {needsSignIn && !authLoading && (
+            <SignInGate
+              onSubmit={signInWithOtp}
+              title="Sign in to reveal your match scores"
+              subtitle="Your roles are ready below. Sign in (one-tap magic link) to see your fit score and why you match each one."
+            />
+          )}
           {BUCKETS.map((b) => (
             <BucketSection
               key={b}
@@ -474,6 +492,7 @@ export default function ResultsPage() {
               analyses={analyses[b]}
               annotations={annotations[b]}
               sort={sort}
+              gated={needsSignIn}
               onRetry={(idx) => retryJob(b, idx)}
               onRequestAnnotation={(idx) => annotateUrl(internships[b]?.[idx]?.application_url)}
             />
