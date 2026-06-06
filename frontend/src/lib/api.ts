@@ -54,6 +54,28 @@ function authError(status: number): Error | null {
   return null;
 }
 
+/**
+ * Permanently delete the signed-in user's account + data (DELETE /account). Sends the bearer
+ * token; the backend require_user-gates it. Returns the server's summary (what was removed +
+ * whether the Supabase auth user was deleted). Callers should sign out + redirect after.
+ */
+export async function deleteAccount(): Promise<{
+  deleted: boolean;
+  auth_user_deleted: boolean;
+}> {
+  const res = await fetch(`${API_BASE}/account`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const authErr = authError(res.status);
+    if (authErr) throw authErr;
+    const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+    throw new Error(err.detail ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function parseResume(file: File): Promise<{ profile_id: string; profile: UnifiedProfile }> {
   const form = new FormData();
   form.append("file", file);

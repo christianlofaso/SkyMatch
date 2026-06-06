@@ -38,6 +38,7 @@ from routes.resume import router as resume_router
 from routes.analyze import router as analyze_router
 from routes.cost import router as cost_router
 from routes.admin import router as admin_router
+from routes.account import router as account_router
 
 app = FastAPI(title="Pathfinder API")
 
@@ -93,6 +94,10 @@ app.include_router(resume_router, dependencies=_GATED)
 app.include_router(analyze_router, dependencies=_GATED)
 app.include_router(cost_router)
 app.include_router(admin_router)
+# Account self-service (deletion) — UNGATED on purpose: no LLM, and a user must be able to
+# delete their account even while the kill switch is halting the LLM routes. Auth-protected
+# by require_user inside the route.
+app.include_router(account_router)
 
 
 @app.get("/health")

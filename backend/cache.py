@@ -328,6 +328,25 @@ def get_usage_counts(user_id: str, day: str) -> dict:
     return {r["kind"]: int(r["count"]) for r in rows}
 
 
+def delete_user_data(user_id: str) -> dict:
+    """Erase a user's app-side data (account-deletion / M10). Deletes their `users` row and
+    `usage_counters`, and ANONYMIZES the `cost_events` ledger by nulling `user_id` (the rows
+    are an append-only financial record we keep for accounting — nulling de-links the PII).
+    Returns row counts per table. Caller also deletes the Supabase auth user (lib/supabase_admin).
+    All in one transaction so a partial delete can't leave dangling references."""
+    with get_db() as conn:
+        anon = conn.execute(
+            "UPDATE cost_events SET user_id = NULL WHERE user_id = %s", (user_id,)
+        ).rowcount
+        usage = conn.execute(
+            "DELETE FROM usage_counters WHERE user_id = %s", (user_id,)
+        ).rowcount
+        users = conn.execute(
+            "DELETE FROM users WHERE id = %s", (user_id,)
+        ).rowcount
+    return {"users": users, "usage_counters": usage, "cost_events_anonymized": anon}
+
+
 # --- URL liveness cache (global, 7-day TTL) --------------------------------
 
 def get_url_liveness(url: str) -> bool | None:

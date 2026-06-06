@@ -190,7 +190,8 @@ pathfinder/
 │   │   ├── firecrawl.py            # Shared Firecrawl client (is_available/scrape/JOB_SCHEMA) — used by analyze.py + ingest_core.py
 │   │   ├── resource_validation.py  # Generic-URL reject + allowlist + async HEAD liveness for roadmap URLs (cached 7d)
 │   │   ├── timing.py               # Request timing — timing_session/timed/timed_call → sorted [timing] breakdown
-│   │   └── cost.py                 # Token/cost accounting — cost_session/record_usage/record_cache_hit → [cost] log + persisted to cost_events ledger (read by GET /cost/summary)
+│   │   ├── cost.py                 # Token/cost accounting — cost_session/record_usage/record_cache_hit → [cost] log + persisted to cost_events ledger (read by GET /cost/summary)
+│   │   └── supabase_admin.py       # Supabase Admin API client (service_role) — auth-user delete for DELETE /account; best-effort, optional (the only backend→Supabase HTTP call)
 │   ├── site_handlers/           # Per-vendor SPA career-portal handlers (base.py + microsoft.py)
 │   ├── prompts/                 # *.txt system prompts (extraction, matching, quick_verdict, roadmap, …)
 │   └── routes/
@@ -200,9 +201,10 @@ pathfinder/
 │       ├── analyze.py           # POST /analyze + /analyze/batch — full + quick pipelines, caches
 │       ├── connections.py       # POST /connections/suggest — LinkdAPI + Claude (DORMANT: retained but no longer called by /run)
 │       ├── internships.py       # POST /internships/search (zero-LLM serve) + /internships/annotate (deferred, lazy, cached fit text); local live-fetch fallback
-│       └── cost.py              # GET /cost/summary — spend + cache-savings + prompt-cache % from the cost_events ledger
+│       ├── cost.py              # GET /cost/summary — spend + cache-savings + prompt-cache % from the cost_events ledger
+│       └── account.py           # DELETE /account — account self-deletion (require_user; ungated by cost_guard); uses cache.delete_user_data + lib/supabase_admin
 └── frontend/src/
-    ├── app/                     # layout, globals.css, page.tsx (home), analyze/, results/[id]/
+    ├── app/                     # layout (+ site footer: privacy/terms/account), globals.css, page.tsx (home), analyze/, results/[id]/, account/, privacy/, terms/
     ├── components/              # ProfileCard, ConnectionCard, InternshipCard, BucketSection, VerdictCard, BreakdownView, PreviousRuns
     ├── lib/                     # api.ts (runPathfinder/parseResume/analyzeJob/analyzeBatch), constants.ts, storage.ts (localStorage run history)
     └── types/pathfinder.ts      # Zod schemas + inferred TS types (source of truth)
@@ -227,6 +229,7 @@ pathfinder/
 | GET | `/cost/summary` | `?days=N` (default 7) | spend + estimated cache savings + per-model/session breakdown + prompt-cache % from the `cost_events` ledger |
 | POST | `/admin/killswitch` | `{on: bool}` + `X-Admin-Token` header | toggles the manual kill switch (`app_flags.kill_switch`); halts all gated routes with `503` while on. `403` if `ADMIN_TOKEN` unset/mismatched |
 | GET | `/admin/status` | `X-Admin-Token` header | current kill-switch state, rolling-window spend vs cap, and rate-limit config (`lib/guard.status_snapshot`) |
+| DELETE | `/account` | bearer token | deletes the signed-in user (`require_user`): app data (`users` + `usage_counters`, `cost_events` anonymized) + the Supabase auth user when `SUPABASE_SERVICE_ROLE_KEY` is set (`lib/supabase_admin`, best-effort). **Ungated** by `cost_guard` so deletion works during a halt (`routes/account.py`). `400` if auth is disabled |
 | GET | `/health` | — | `{"status": "ok"}` |
 
 > **Cost-protection gate.** The LLM-firing routers (`/run`, `/analyze*`, `/profile*`, `/internships*`, `/connections/*`) are wired with `dependencies=[Depends(cost_guard)]` in `main.py` (`lib/guard.py`): per-IP **rate + concurrency limits** (`429`) and a **spend-cap kill switch** (`503`, automatic on rolling spend ≥ `SPEND_CAP_USD_DAILY` OR the manual `app_flags.kill_switch`). `/cost/summary`, `/admin/*`, and `/health` are **ungated** so observability + recovery stay reachable during a halt. State is **Redis-backed (shared across replicas) when `REDIS_URL` is set, else in-process / per-replica** (the rate-limiter + spend cache via `lib/redis_client.py`; the manual flag persists in Postgres `app_flags`). **The kill-switch SUM (`cache.sum_spend_since`) counts USER-FACING spend ONLY — it EXCLUDES `cost_events` rows tagged with a `worker:%` `cost_session`**, so background ingestion (the worker's Haiku parse pass) can never trip the user-facing 503. The worker has its **own** soft budget instead: `WORKER_SPEND_CAP_USD_DAILY` (over `WORKER_SPEND_CAP_WINDOW_SEC`, summed by `cache.sum_worker_spend_since`), enforced inside `parse_pass()` (stops parsing, leaving rows for next run). Knobs: `RATE_LIMIT_PER_MIN`/`_CONCURRENT`/`_WINDOW_SEC`/`_INFLIGHT_TTL_SEC`, `SPEND_CAP_USD_DAILY`/`_WINDOW_SEC`, `SPEND_CACHE_TTL_SEC`, `WORKER_SPEND_CAP_USD_DAILY`/`_WINDOW_SEC`, `REDIS_URL`/`REDIS_RETRY_COOLDOWN_SEC`, `ADMIN_TOKEN`.

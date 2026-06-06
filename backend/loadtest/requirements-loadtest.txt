@@ -1,0 +1,4 @@
+# Load-test tooling — NOT a runtime dependency (kept out of requirements.txt so it never
+# ships in the prod image). Install into the venv only when running a load test:
+#     pip install -r loadtest/requirements-loadtest.txt
+locust>=2,<3

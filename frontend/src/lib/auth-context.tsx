@@ -110,6 +110,13 @@ function AuthChip() {
           <span className="truncate max-w-[160px]" style={{ color: "var(--text-primary)" }}>
             {user?.email ?? "signed in"}
           </span>
+          <a
+            href="/account"
+            className="uppercase tracking-widest hover:opacity-70"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            account
+          </a>
           <button
             type="button"
             onClick={() => signOut()}

@@ -76,6 +76,9 @@ broken; still, set Redis).
   that verifies the anon/service keys but NOT modern user logins.) Optional `SUPABASE_JWT_AUD`/`_ALG`/`SUPABASE_JWKS_TIMEOUT_SEC`.
 - `QUOTA_MATCHER_PER_DAY=20`, `QUOTA_ANALYSIS_PER_DAY=5`.
 - `TURNSTILE_SECRET` (**backend-only**).
+- `SUPABASE_SERVICE_ROLE_KEY` (**backend-only**, admin-scoped) — used ONLY by `DELETE /account`
+  to hard-delete the Supabase auth user. Unset → deletion still erases all app-side data but
+  leaves the auth user for manual cleanup. **Never expose to the browser.**
 
 **Observability:** `SENTRY_DSN`, `SENTRY_TRACES_SAMPLE_RATE=0.1`, `ENVIRONMENT=staging|production`.
 
@@ -120,6 +123,9 @@ service), etc.
 - [ ] One **load test** vs staging (k6/locust) — validates 2 replicas + the Redis Sonnet governor under concurrency.
 - [ ] `/admin/killswitch` + `/admin/status` reachable with `ADMIN_TOKEN`.
 - [ ] Privacy policy + ToS + data-retention + account-deletion path published (PII/accounts).
+      _Code DONE (M10): `/privacy` + `/terms` pages (TEMPLATES — legal to finalize the text),
+      `/account` page, and `DELETE /account` (set `SUPABASE_SERVICE_ROLE_KEY` for full auth-user
+      delete). Remaining: counsel finalizes the legal copy + contact emails._
 
 ## 6. Known accepted risks
 
