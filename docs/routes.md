@@ -12,6 +12,22 @@ The LLM-firing routers are wired in `main.py` with `dependencies=[Depends(cost_g
 
 Client IP = first hop of `X-Forwarded-For` (deploy is behind a proxy) else the direct peer. **State is Redis-backed (shared across replicas) when `REDIS_URL` is set, else in-process / per-replica.** The per-IP rate + concurrency limiter is an atomic Lua reserve over two Redis ZSETs — a sliding-window rate set and a crash-TTL'd concurrency set (`RATE_LIMIT_INFLIGHT_TTL_SEC`, so a crashed replica's in-flight slots self-expire); the rolling spend total is a shared Redis cache key (`guard:spend`) recomputed via `cache.sum_spend_since` at most once per `SPEND_CACHE_TTL_SEC` per replica. The manual kill-switch flag stays in **Postgres `app_flags`** (must survive restart + toggle instantly). All paths **fall back to the in-process implementation** when Redis is absent/unhealthy (`lib/redis_client.py` circuit breaker, `REDIS_RETRY_COOLDOWN_SEC`) — local dev needs no Redis; a Redis outage degrades to per-replica limiting, never a 503. Knobs: `RATE_LIMIT_PER_MIN`/`_CONCURRENT`/`_WINDOW_SEC`/`_INFLIGHT_TTL_SEC`, `SPEND_CAP_USD_DAILY`/`_WINDOW_SEC`, `SPEND_CACHE_TTL_SEC`, `REDIS_URL`/`REDIS_RETRY_COOLDOWN_SEC`.
 
+## Auth + per-user quota gate (`lib/auth.py`) — OPTIONAL
+
+Supabase magic-link auth, verified **locally + statelessly** (HS256 JWT signed with `SUPABASE_JWT_SECRET`; `sub` = user id). **`SUPABASE_JWT_SECRET` unset → auth disabled**: every dep returns `None`/no-ops and all routes stay anonymous (local dev unchanged). Set it → gating goes live, no code change.
+
+One **cached** dependency does the work and the others build on it (FastAPI caches `Depends` per request, so decode+upsert runs once):
+- `optional_user(request) -> User | None` — parse the `Bearer` token; `None` when auth off or no token; **401** on a present-but-invalid/expired token; else decode (verify sig + `exp` + `aud`) → `User`, and `upsert_user` (non-fatal on DB error). 
+- `require_user(user=Depends(optional_user))` — **401** when auth is ON and the caller is anonymous; `None` when auth is off.
+- `quota(kind)` / `enforce_quota(user, kind)` — increment the `usage_counters` row for `(user, UTC-day, kind)` and **429** over the cap; **no-op for anonymous** (spend cap is the backstop); fails **open** on a quota-store hiccup.
+
+**Two-rule gate, attached per-route in the decorators** (router-level stays `cost_guard` only):
+- **Matcher results-reveal → requires sign-in:** `POST /analyze/batch` (`require_user` + `quota("matcher")`, default 20/day) and `POST /internships/annotate` (`require_user` only — one results page expands many cards, so it's NOT separately quota'd; the matcher run is charged once on `/analyze/batch`).
+- **Standalone analyzer → one free then gate:** `POST /analyze` (full mode only) + `POST /analyze/stream` charge `quota("analysis")` (default 5/day; Opus-heavy → tighter). The hard anonymous gate is frontend-side; the spend cap backstops.
+- **Open (no auth dep):** `/run`, `/run/stream`, `/profile/*`, `/internships/search`, first `/analyze`.
+
+`cost_events.user_id` attributes spend per user (threaded via `cost_session(name, user_id=…)`). **Cloudflare Turnstile** (`lib/turnstile.verify_turnstile`, on the expensive routes) is no-op until `TURNSTILE_SECRET` is set — then it requires `X-Turnstile-Token`; siteverify network errors **fail open**, a definitive reject → **403**. Knobs: `SUPABASE_JWT_SECRET`/`_ALG`/`_AUD`, `QUOTA_MATCHER_PER_DAY`, `QUOTA_ANALYSIS_PER_DAY`, `TURNSTILE_SECRET`/`TURNSTILE_TIMEOUT_SEC`.
+
 **`routes/admin.py`** (token-guarded by `X-Admin-Token` == env `ADMIN_TOKEN`; unset/mismatch → `403`, fail closed):
 - `POST /admin/killswitch {on: bool}` → `set_flag("kill_switch", "on"|"off")`.
 - `GET /admin/status` → `status_snapshot()`: kill-switch state, rolling spend vs cap, rate-limit config.

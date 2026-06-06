@@ -34,6 +34,8 @@ _CACHE_WRITE_MULT = 1.25  # cache writes ~125% of input price
 _rows: contextvars.ContextVar = contextvars.ContextVar("cost_rows", default=None)
 # Name of the active cost_session (the "search"), tagged onto persisted cost_events rows.
 _session_name: contextvars.ContextVar = contextvars.ContextVar("cost_session_name", default=None)
+# Authenticated user id (Supabase sub) for the active session — None when anonymous/auth off.
+_user_id: contextvars.ContextVar = contextvars.ContextVar("cost_user_id", default=None)
 
 # Representative (model, input_tokens, output_tokens) per cache-hit label — used to
 # estimate the USD a full-call cache avoidance saved. Approximate, like all USD here.
@@ -71,6 +73,7 @@ def record_usage(label: str, model: str, usage) -> None:
             kind="call", session=_session_name.get(), label=label, model=model,
             input_tokens=in_tok, output_tokens=out_tok,
             cache_read_tokens=cache_read, cache_write_tokens=cache_write, usd=usd,
+            user_id=_user_id.get(),
         )
     except Exception as e:
         print(f"[cost] persist failed: {e}")
@@ -89,7 +92,7 @@ def record_cache_hit(label: str, model: str | None = None) -> None:
     try:
         insert_cost_event(
             kind="hit", session=_session_name.get(), label=label,
-            model=est_model, est_saved_usd=saved,
+            model=est_model, est_saved_usd=saved, user_id=_user_id.get(),
         )
     except Exception as e:
         print(f"[cost] hit-persist failed: {e}")
@@ -97,8 +100,9 @@ def record_cache_hit(label: str, model: str | None = None) -> None:
 
 
 @contextmanager
-def cost_session(name: str):
-    """Collect every record_usage() call within and print a sorted USD breakdown.
+def cost_session(name: str, user_id: str | None = None):
+    """Collect every record_usage() call within and print a sorted USD breakdown. Pass
+    `user_id` (Supabase sub) to attribute every persisted cost_events row to that user.
 
     Safe across asyncio tasks and asyncio.to_thread workers: the contextvar binding
     is copied into each child context at task/thread creation, and they all append to
@@ -107,11 +111,13 @@ def cost_session(name: str):
     rows: list[tuple] = []
     token = _rows.set(rows)
     name_token = _session_name.set(name)
+    user_token = _user_id.set(user_id)
     try:
         yield
     finally:
         _rows.reset(token)
         _session_name.reset(name_token)
+        _user_id.reset(user_token)
         total_usd = sum(r[6] for r in rows)
         total_in  = sum(r[2] for r in rows)
         total_out = sum(r[3] for r in rows)

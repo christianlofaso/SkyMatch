@@ -5,7 +5,10 @@ import os
 import re
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from lib.auth import User, optional_user, require_user
+from lib.turnstile import verify_turnstile
 from fastapi.responses import StreamingResponse
 
 from cache import (
@@ -625,11 +628,18 @@ async def _annotate_one(
         )
 
 
-@router.post("/internships/annotate")
-async def internships_annotate_route(req: AnnotateRequest):
+# Part of the matcher results-reveal gate: REQUIRES sign-in (require_user). NOT separately
+# quota'd — one results page expands many cards (the matcher run is charged once on
+# /analyze/batch). verify_turnstile no-ops until configured; both no-op when auth is off (dev).
+@router.post(
+    "/internships/annotate",
+    dependencies=[Depends(require_user), Depends(verify_turnstile)],
+)
+async def internships_annotate_route(req: AnnotateRequest, user: User | None = Depends(optional_user)):
     """Streams ndjson: one AnnotateEnvelope per line, in completion order. Each job is a
     served (url, bucket); we write its per-user fit_explanation (+reach_gap for reach).
     In-flight Sonnet calls are bounded by the global sonnet_slot() governor."""
+    uid = user.id if user else None
     city = _parse_metro(req.profile.location)
     profile_json = req.profile.model_dump_json()  # serialize once; reused for every job's cache key
     queue: asyncio.Queue[AnnotateEnvelope] = asyncio.Queue()
@@ -643,7 +653,7 @@ async def internships_annotate_route(req: AnnotateRequest):
         # cost_session must wrap the whole drain loop so each task inherits the contextvar
         # binding and its record_usage()/record_cache_hit() calls aggregate + persist under
         # this search's name (mirrors /analyze/batch).
-        with cost_session(f"/internships/annotate ({len(req.jobs)} roles)"):
+        with cost_session(f"/internships/annotate ({len(req.jobs)} roles)", user_id=uid):
             tasks = [asyncio.create_task(_one(i, j)) for i, j in enumerate(req.jobs)]
             pending = len(tasks)
             try:

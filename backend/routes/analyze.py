@@ -7,7 +7,10 @@ from typing import Literal, NamedTuple
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from lib.auth import User, optional_user, require_user, quota, enforce_quota
+from lib.turnstile import verify_turnstile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
@@ -1046,11 +1049,19 @@ async def _resolve_job(
     return text, None, _compute_job_id(None, text)
 
 
-@router.post("/analyze")
-async def analyze(req: AnalyzeRequest):
+# Auth gate (see lib/auth.py): standalone analyzer = "one free, then gate" — the hard
+# anonymous gate is enforced frontend-side; the backend counts an 'analysis' against the
+# signed-in user's daily quota (full mode only — quick mode is the batch unit). verify_turnstile
+# is a no-op until TURNSTILE_SECRET is set. Both no-op entirely when auth is off (dev).
+@router.post("/analyze", dependencies=[Depends(verify_turnstile)])
+async def analyze(req: AnalyzeRequest, user: User | None = Depends(optional_user)):
     """Thin wrapper: open a timing session so the full pipeline prints a sorted
     [timing] breakdown (fetch vs extract vs match vs phase3), mirroring /run."""
-    with timing_session(f"/analyze {req.mode}"), cost_session(f"/analyze {req.mode}"):
+    # Charge the analysis quota for full runs only (Opus Phase 3 is the priced action). A
+    # cached hit still counts (one user action = one slot); fine for a daily usage cap.
+    if req.mode == "full":
+        await enforce_quota(user, "analysis")
+    with timing_session(f"/analyze {req.mode}"), cost_session(f"/analyze {req.mode}", user_id=user.id if user else None):
         return await _analyze_impl(req)
 
 
@@ -1486,22 +1497,25 @@ def _cached_stream_envelopes(full: AnalysisResponse) -> list[AnalyzeStreamEnvelo
     ]
 
 
-@router.post("/analyze/stream")
-async def analyze_stream(req: AnalyzeRequest):
+# Always full mode → charge one 'analysis' per call (quota dep); verify_turnstile no-ops
+# until configured. Both no-op when auth is off (dev).
+@router.post("/analyze/stream", dependencies=[Depends(quota("analysis")), Depends(verify_turnstile)])
+async def analyze_stream(req: AnalyzeRequest, user: User | None = Depends(optional_user)):
     """Full-mode true streaming. The prelude (resolve/extract/match/score) runs
     first and can still raise a proper 422/500; only the verdict-emit + Phase 3
     (which can't fail the request) stream. Emits ndjson AnalyzeStreamEnvelopes:
     verdict → roadmap/project (completion order) → done. The JSON /analyze is
     unchanged. Two [cost] ledgers print by design (prelude + phase3)."""
+    uid = user.id if user else None
     # Prelude: opened in its own session so extract/match spend is recorded, and
     # so its HTTPExceptions raise BEFORE the StreamingResponse is constructed.
-    with timing_session("/analyze/stream prelude"), cost_session("/analyze/stream prelude"):
+    with timing_session("/analyze/stream prelude"), cost_session("/analyze/stream prelude", user_id=uid):
         prelude = await _analyze_stream_prelude(req)
 
     async def _gen():
         # cost_session wraps task creation so the Phase 3 tasks inherit the
         # contextvar binding and their record_usage() calls aggregate (same as batch).
-        with timing_session("/analyze/stream phase3"), cost_session("/analyze/stream phase3"):
+        with timing_session("/analyze/stream phase3"), cost_session("/analyze/stream phase3", user_id=uid):
             if prelude[0] == "cache_hit":
                 for env in _cached_stream_envelopes(prelude[1]):
                     yield env.model_dump_json() + "\n"
@@ -1596,10 +1610,16 @@ async def _quick_for_one(
     return quick
 
 
-@router.post("/analyze/batch")
-async def analyze_batch(req: BatchAnalyzeRequest):
+# Matcher results-reveal gate: REQUIRES sign-in (require_user) + charges one 'matcher' run;
+# verify_turnstile no-ops until configured. All three no-op when auth is off (dev).
+@router.post(
+    "/analyze/batch",
+    dependencies=[Depends(require_user), Depends(quota("matcher")), Depends(verify_turnstile)],
+)
+async def analyze_batch(req: BatchAnalyzeRequest, user: User | None = Depends(optional_user)):
     """Streams ndjson: one BatchEnvelope per line, in completion order.
     Cap of 50 jobs per batch (enforced by pydantic). Cap of 8 in-flight LLM calls."""
+    uid = user.id if user else None
     sem = asyncio.Semaphore(_BATCH_LLM_CONCURRENCY)
     queue: asyncio.Queue[BatchEnvelope] = asyncio.Queue()
 
@@ -1619,7 +1639,7 @@ async def analyze_batch(req: BatchAnalyzeRequest):
     async def _gen():
         # cost_session must wrap task creation so each task inherits the contextvar
         # binding and its record_usage() calls aggregate into one batch breakdown.
-        with cost_session(f"/analyze/batch ({len(req.jobs)} jobs)"):
+        with cost_session(f"/analyze/batch ({len(req.jobs)} jobs)", user_id=uid):
             tasks = [asyncio.create_task(_one(i, j)) for i, j in enumerate(req.jobs)]
             pending = len(tasks)
             try:

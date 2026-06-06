@@ -220,16 +220,16 @@ def insert_cost_event(
     *, kind: str, session: str | None = None, label: str | None = None,
     model: str | None = None, input_tokens: int = 0, output_tokens: int = 0,
     cache_read_tokens: int = 0, cache_write_tokens: int = 0,
-    usd: float = 0.0, est_saved_usd: float = 0.0,
+    usd: float = 0.0, est_saved_usd: float = 0.0, user_id: str | None = None,
 ) -> None:
     # id is supplied by the IDENTITY column — omitted from the INSERT, as before.
     with get_db() as conn:
         conn.execute(
             "INSERT INTO cost_events (created_at, kind, session, label, model, "
-            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, usd, est_saved_usd) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, usd, est_saved_usd, user_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (int(time.time()), kind, session, label, model, input_tokens, output_tokens,
-             cache_read_tokens, cache_write_tokens, usd, est_saved_usd),
+             cache_read_tokens, cache_write_tokens, usd, est_saved_usd, user_id),
         )
 
 
@@ -268,6 +268,46 @@ def set_flag(key: str, value: str) -> None:
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at",
             (key, value, int(time.time())),
         )
+
+
+# --- Auth: users + per-user daily quota counters (milestone 3) --------------
+# Only touched when auth is enabled (SUPABASE_JWT_SECRET set); otherwise unused.
+
+def upsert_user(user_id: str, email: str | None) -> None:
+    """Record/refresh a Supabase auth user (keyed by JWT `sub`). Email is updated when
+    present, never nulled by a token that omits it."""
+    now = int(time.time())
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO users (id, email, created_at, last_seen) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (id) DO UPDATE SET "
+            "email = COALESCE(EXCLUDED.email, users.email), last_seen = EXCLUDED.last_seen",
+            (user_id, email, now, now),
+        )
+
+
+def incr_usage(user_id: str, day: str, kind: str) -> int:
+    """Atomically increment the (user, UTC-day, kind) counter and return the NEW count.
+    Quota enforcement increments first, then rejects if over the cap (a daily counter, so a
+    rejected over-cap attempt simply stays over)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "INSERT INTO usage_counters (user_id, day, kind, count) VALUES (%s, %s, %s, 1) "
+            "ON CONFLICT (user_id, day, kind) DO UPDATE SET count = usage_counters.count + 1 "
+            "RETURNING count",
+            (user_id, day, kind),
+        ).fetchone()
+    return int(row["count"])
+
+
+def get_usage_counts(user_id: str, day: str) -> dict:
+    """All of a user's counters for a UTC day, as {kind: count}. For surfacing remaining quota."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT kind, count FROM usage_counters WHERE user_id = %s AND day = %s",
+            (user_id, day),
+        ).fetchall()
+    return {r["kind"]: int(r["count"]) for r in rows}
 
 
 # --- URL liveness cache (global, 7-day TTL) --------------------------------
