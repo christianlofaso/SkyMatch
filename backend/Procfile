@@ -1,0 +1,7 @@
+# Portable process definitions (Heroku/Render/Railway-Nixpacks fallback if you ever drop the
+# Dockerfile). The canonical Railway config is railway.toml (web) + railway.worker.toml
+# (worker). Run DB migrations (alembic upgrade head) as a release/pre-deploy step on the
+# platform — NOT in the web process, or every replica would race the migration on boot.
+web: uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+worker: python -m worker.ingest
+release: alembic upgrade head

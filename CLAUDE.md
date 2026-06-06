@@ -44,6 +44,7 @@ This file is the always-loaded map. Deep reference lives in `docs/`; read the ma
 | [docs/logging.md](docs/logging.md) | reading logs or adding a log line — `[analyze]`/`[timing]`/`[cost]`/`[validate]` conventions |
 | [docs/development.md](docs/development.md) | doing a recurring task — adding a profile field, site handler, bucket, model constant, tuning weights, adjusting Phase 3 / batch knobs |
 | [docs/gotchas.md](docs/gotchas.md) | **anything non-trivial — read this first.** Async/blocking traps, Opus 4.8 quirks, `max_tokens` truncation, mojibake, Cloudflare-walled domains, cache subtleties |
+| [docs/deploy.md](docs/deploy.md) | deploying / changing infra — Vercel + Railway (web ×2 + worker cron + Redis) + Supabase, env-var inventory, CI + staging→prod promote, Dockerfile/`railway.toml`, pre-launch checklist |
 
 **Keep sources of truth in sync:** `backend/schemas.py` ⇄ `frontend/src/types/pathfinder.ts` for data shapes; `backend/config/models.py` for model IDs; `backend/config/niches.py` for ingestion fields/metros/reach pool; `frontend/src/lib/constants.ts` for verdict labels/colors. Also: the listing `role_category` vocabulary in `prompts/listing_parse.txt` ⇄ `lib/listing_parser.ROLE_CATEGORIES` ⇄ the off-field exclusion set `_OFF_FIELD_CATEGORIES` in `routes/internships.py` (applied to the **reach AND local** buckets via `_OFF_FIELD_BUCKETS`).
 

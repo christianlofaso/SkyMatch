@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
 import traceback
 
 from fastapi import Depends, FastAPI, Request
@@ -10,6 +11,25 @@ from fastapi.responses import JSONResponse
 from cache import init_db
 from lib import redis_client
 from lib.guard import cost_guard
+
+# --- Sentry (optional) -------------------------------------------------------
+# Wired only when SENTRY_DSN is set (prod); import-guarded so a missing sentry-sdk or
+# unset DSN never affects local dev. `_sentry` is the live module (or None) — the global
+# exception handler uses it to capture unhandled errors.
+_sentry = None
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk as _sentry
+        _sentry.init(
+            dsn=_SENTRY_DSN,
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            environment=os.getenv("ENVIRONMENT", "production"),
+        )
+        print("[sentry] initialized")
+    except Exception as e:  # bad DSN / missing package must not crash startup
+        _sentry = None
+        print(f"[sentry] init skipped: {e}")
 from routes.run import router as run_router
 from routes.profile import router as profile_router
 from routes.connections import router as connections_router
@@ -21,9 +41,13 @@ from routes.admin import router as admin_router
 
 app = FastAPI(title="Pathfinder API")
 
+# Allowed browser origins. Comma-separated CORS_ORIGINS in prod (e.g. "https://app.example.com");
+# defaults to localhost for dev. MUST be set to the deployed frontend origin before launch.
+_CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -49,7 +73,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     envelopes, so this only catches route-level failures."""
     print(f"[error] unhandled {request.method} {request.url.path}: {exc!r}")
     traceback.print_exc()
-    # SENTRY: sentry_sdk.capture_exception(exc) here once SENTRY_DSN is wired (deferred).
+    if _sentry is not None:
+        _sentry.capture_exception(exc)
     return JSONResponse(
         status_code=500,
         content={"detail": "Something went wrong on our end. Please try again."},

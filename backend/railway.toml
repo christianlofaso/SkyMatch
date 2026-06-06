@@ -1,0 +1,26 @@
+# Railway config-as-code for the WEB service (the FastAPI app).
+# Set this service's root directory to backend/ and leave its config path at the default
+# (railway.toml). The WORKER is a SEPARATE Railway service — point that service's config
+# path at backend/railway.worker.toml (see that file).
+#
+# Both services connect to Supabase (DATABASE_URL) + Railway Redis (REDIS_URL) via env vars
+# set per-environment in the Railway dashboard (staging vs prod) — never committed.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# 2 fixed replicas: redundancy + zero-downtime rolling deploys. Correct now that the guard +
+# Sonnet governor are Redis-backed (see lib/redis_client.py). Autoscale later if needed.
+numReplicas = 2
+# Run DB migrations once before the new version takes traffic (Railway runs this in a
+# one-off container against DATABASE_URL). Keep idempotent — alembic upgrade head is.
+preDeployCommand = ["alembic upgrade head"]
+# Bind the platform-injected $PORT. (Mirrors the Dockerfile CMD; explicit here so the web
+# service is unambiguous even if the image default changes.)
+startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

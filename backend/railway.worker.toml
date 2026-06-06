@@ -1,0 +1,20 @@
+# Railway config-as-code for the WORKER service (ingestion: worker/ingest.py).
+# Create a SECOND Railway service from the same repo, set its root directory to backend/,
+# and set its "Config Path" to backend/railway.worker.toml so it uses THIS file instead of
+# railway.toml. Same image as web — only the run shape differs.
+#
+# It's a CRON service: run-to-exit every ~6h (one ingest pass = national pool + per-rotation
+# metro local + reach pool), NOT a long-running server. No replicas, no healthcheck.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC). Keep comfortably under SERVE_MAX_AGE_HOURS
+# (48h) so the index never goes stale. Railway starts a fresh container per tick; it exits
+# when the pass finishes.
+cronSchedule = "0 */6 * * *"
+startCommand = "python -m worker.ingest"
+# A cron job that exits non-zero shouldn't be retried in a tight loop — wait for the next tick.
+restartPolicyType = "never"

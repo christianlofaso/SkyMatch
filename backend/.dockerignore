@@ -1,0 +1,19 @@
+# Keep the image small + secrets out. Build context is backend/.
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+!.env.example
+scratch/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+.DS_Store
