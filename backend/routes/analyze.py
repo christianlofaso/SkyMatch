@@ -86,7 +86,7 @@ _SPA_SEARCH_PORTALS: dict[str, str] = {}
 
 class _FetchResult(NamedTuple):
     text:      str          # job text to feed into the LLM pipeline
-    path:      str          # "direct" | "firecrawl_basic" | "firecrawl_stealth" | "site_handler:<name>"
+    path:      str          # "direct" | "firecrawl_<proxy>" (auto/basic/enhanced) | "site_handler:<name>"
     extracted: dict | None  # raw Firecrawl extract dict when schema extraction succeeded
     posted_at: str | None = None   # ISO-ish posted date when site_handler returned one
     apply_url: str | None = None   # direct apply URL when site_handler returned one
@@ -408,8 +408,8 @@ async def _fetch_job_content(url: str) -> _FetchResult:
     """
     Three-tier fetch strategy:
       Attempt 1 — direct httpx GET (fast; works for Greenhouse, Lever, static sites)
-      Attempt 2a — Firecrawl with configured proxy (default: basic) + waitFor + schema extraction
-      Attempt 2b — Firecrawl stealth retry (only when 2a returns short/empty content)
+      Attempt 2  — Firecrawl with configured proxy (default: "auto", which escalates past
+                   Cloudflare / JS shells server-side) + waitFor + schema extraction
     Raises HTTPException(422) only if all attempts fail.
     """
     browser_headers = {
@@ -465,10 +465,12 @@ async def _fetch_job_content(url: str) -> _FetchResult:
         print(f"[analyze] direct fetch failed ({exc}), trying Firecrawl")
 
     # ── Attempt 2: Firecrawl ─────────────────────────────────────────────────
+    # Proxy mode defaults to "auto": Firecrawl tries the cheapest proxy and escalates
+    # past Cloudflare / JS shells server-side when blocked, so the old manual
+    # basic→stealth retry (2a/2b) is no longer needed — one call covers both.
     if not _FIRECRAWL_API_KEY:
         print("[analyze] FIRECRAWL_API_KEY not set, skipping Firecrawl")
     else:
-        # 2a — configured proxy mode (default: basic)
         try:
             async with timed(f"analyze/firecrawl:{_FIRECRAWL_PROXY_MODE}"):
                 data = await _firecrawl_scrape(url, _FIRECRAWL_PROXY_MODE)
@@ -477,18 +479,6 @@ async def _fetch_job_content(url: str) -> _FetchResult:
                 return result
         except httpx.RequestError as exc:
             print(f"[analyze] Firecrawl {_FIRECRAWL_PROXY_MODE} network error: {exc}")
-
-        # 2b — stealth escalation (only when basic returned nothing useful)
-        if _FIRECRAWL_PROXY_MODE != "stealth":
-            print(f"[analyze] Firecrawl {_FIRECRAWL_PROXY_MODE} returned short content, retrying with stealth")
-            try:
-                async with timed("analyze/firecrawl:stealth"):
-                    data = await _firecrawl_scrape(url, "stealth")
-                result = _parse_firecrawl_response(data, "stealth")
-                if result:
-                    return result
-            except httpx.RequestError as exc:
-                print(f"[analyze] Firecrawl stealth network error: {exc}")
 
     # ── All attempts failed ───────────────────────────────────────────────────
     raise HTTPException(

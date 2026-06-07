@@ -145,7 +145,8 @@ USE_MOCKS=false               # Return hardcoded mock data — set true for dev 
 FIRECRAWL_API_KEY=...         # Firecrawl (JS-heavy /analyze URLs + internship liveness for wellfound/SPA listings)
 FIRECRAWL_WAIT_MS=5000        # How long to wait for JS render (ms); default 5000
 FIRECRAWL_TIMEOUT_MS=90000    # Total Firecrawl request budget (ms); default 90000 — covers BOTH page fetch AND LLM extraction; keep >= 90000 or verbose pages time out
-FIRECRAWL_PROXY_MODE=basic    # Firecrawl proxy tier: "basic" (default) or "stealth"
+FIRECRAWL_PROXY_MODE=auto     # Firecrawl proxy tier: "auto" (default; escalates past Cloudflare/JS shells server-side) | "basic" | "enhanced". ("stealth" is the deprecated v1 alias — don't use it)
+FIRECRAWL_MAX_CONCURRENCY=2   # Cap on simultaneous Firecrawl scrapes — sized to the plan's concurrent-browser limit (free/hobby = 2). Per-process gate in lib/firecrawl.py; prevents the worker over-subscribing Firecrawl (queue-wait → 408s + orphaned jobs). Default 2
 VOYAGE_API_KEY=...            # Voyage embeddings — listing embeddings (worker parse pass) + profile embedding (internships rank). OPTIONAL: absent → ranking skipped, serving falls back
 EMBED_MODEL=voyage-3.5        # Voyage model id (optional; changing it orphans stored vectors — see docs/caching.md)
 WORKER_PARSE_CONCURRENCY=8    # Max in-flight Haiku listing-parse calls in the worker parse pass (worker-only; optional)

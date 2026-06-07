@@ -11,9 +11,8 @@ Order of resolution in routes/analyze.py:
   2. _SPA_SEARCH_PORTALS       (generic 422 + paste instructions, route handler)
   3. site handler dispatch     ← THIS MODULE (Attempt 0 inside _fetch_job_content)
   4. direct httpx GET          (Attempt 1)
-  5. Firecrawl basic           (Attempt 2a)
-  6. Firecrawl stealth         (Attempt 2b)
-  7. all-failed 422
+  5. Firecrawl (proxy "auto")  (Attempt 2 — escalates past Cloudflare/JS shells server-side)
+  6. all-failed 422
 
 Adding a new handler:
   1. Create site_handlers/<vendor>.py defining a class with

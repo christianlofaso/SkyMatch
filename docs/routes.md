@@ -103,8 +103,7 @@ Priority checks before any fetch:
 For a URL, `_resolve_job` first checks `job_fetch_cache` (per-URL, 3-day) — a hit skips the fetch entirely (path `"cache"`). On a miss, `_fetch_job_content()` runs four tiers (wrapped in the `analyze/fetch` timing span) and the scraped text + `posted_at`/`apply_url` are written back to `job_fetch_cache`:
 - **Attempt 0 — site handler dispatch** (`site_handlers.dispatch(url)`). Matched handlers (e.g. Microsoft) return a normalized `JobPosting`. If a handler matches but returns `None`, falls through to Attempt 1.
 - **Attempt 1 — direct httpx GET** (15s, browser headers, follow redirects): accepts if `_MIN_CONTENT_LEN (200) ≤ len ≤ _MAX_CONTENT_LEN (50,000)` chars. Out-of-range → Firecrawl.
-- **Attempt 2a — Firecrawl with `_FIRECRAWL_PROXY_MODE`** (default `"basic"`): POST `/v1/scrape`, `formats: ["markdown","extract"]`, schema-locked extraction via `_JOB_SCHEMA`, then `_build_text_from_extraction()`. Falls back to markdown if ≥ 200 chars.
-- **Attempt 2b — Firecrawl stealth escalation** (only if 2a returned nothing useful).
+- **Attempt 2 — Firecrawl with `_FIRECRAWL_PROXY_MODE`** (default `"auto"`): POST `/v1/scrape`, `formats: ["markdown","extract"]`, schema-locked extraction via `_JOB_SCHEMA`, then `_build_text_from_extraction()`. Falls back to markdown if ≥ 200 chars. `"auto"` escalates past Cloudflare / JS shells server-side, so the old manual basic→stealth retry (2a/2b) collapsed into this single call.
 - All attempts failed → 422.
 
 `_FetchResult(text, path, extracted, posted_at, apply_url)` — `posted_at` and `apply_url` are populated only by site_handlers (Microsoft today).
@@ -146,7 +145,7 @@ After Step B + headline reconciliation, `_generate_phase3()` fires two LLM calls
 
 When `include.roadmap=true` but `gaps` is empty, `roadmap_note` is set to a canned string instead of running the LLM. Failures in either call are logged and swallowed (`None`) so a Phase 3 failure can't break the rest of the analysis. Both results land in `AnalysisResponse` and serialize through `set_user_analysis_cache`.
 
-**Perf / timing:** the whole route is wrapped in `timing_session(f"/analyze {mode}")` (mirrors `/run`) with spans `analyze/fetch`, `analyze/extract`, `analyze/match`, `analyze/phase3` (+ `analyze/firecrawl:{basic,stealth}`). Measured on a real full run: extract **6.6s** + match **9.5s** (both now Sonnet, down from Opus) but **phase3 ≈ 54s (~77% of the request)** — `_run_roadmap` dominates (Opus 4096 + `_ROADMAP_MAX_RETRIES=1` retry, each with URL HEAD validation). Cutting retries 2→1 trimmed ~10s (total ~80s→~70s). Roadmap + project remain `MODEL_FULL` (Opus) by choice; **downgrading them to Sonnet is the next lever** (~54s→~25s) if `/analyze` needs to be faster.
+**Perf / timing:** the whole route is wrapped in `timing_session(f"/analyze {mode}")` (mirrors `/run`) with spans `analyze/fetch`, `analyze/extract`, `analyze/match`, `analyze/phase3` (+ `analyze/firecrawl:{proxy_mode}`, e.g. `analyze/firecrawl:auto`). Measured on a real full run: extract **6.6s** + match **9.5s** (both now Sonnet, down from Opus) but **phase3 ≈ 54s (~77% of the request)** — `_run_roadmap` dominates (Opus 4096 + `_ROADMAP_MAX_RETRIES=1` retry, each with URL HEAD validation). Cutting retries 2→1 trimmed ~10s (total ~80s→~70s). Roadmap + project remain `MODEL_FULL` (Opus) by choice; **downgrading them to Sonnet is the next lever** (~54s→~25s) if `/analyze` needs to be faster.
 
 **Phase 3 cache backfill:** in the cache-hit branch, if a stored full-mode row predates Phase 3 (missing `roadmap`/`project_suggestion`) and the request asks for them, `_phase3_backfill_cached_row` rehydrates `JobSummary`/`MatchItem`/`GapItem`/`Verdict` from the cached row, runs only the missing LLM calls using the live request profile, and writes the patched dict back. No job re-fetch, no Step A re-run.
 
@@ -216,8 +215,8 @@ Any URL without a 5+ digit number or UUID in path fails rule 2 (`_JOB_ID_RE`). R
 
 **Domain exceptions:**
 - `workatastartup.com` — rules 5+6 incompatible with Rails SSR; checks HTTP status + domain redirect instead
-- `wellfound.com` — Cloudflare 403s plain clients, so it's rendered + liveness-checked via Firecrawl **stealth** (`_firecrawl_job_alive`). Dropped if unrenderable (network error, empty, or no `FIRECRAWL_API_KEY`).
-- `_SPA_CAREER_DOMAINS` (Microsoft careers, `jobs.nvidia.com`, …) — JS-SPA / Eightfold sites that serve a generic shell server-side, so a plain fetch can't tell open from closed. Rendered + liveness-checked via Firecrawl **basic**. Add new SPA ATS domains to this set.
+- `wellfound.com` — Cloudflare 403s plain clients, so it's rendered + liveness-checked via Firecrawl proxy **`"auto"`** (`_firecrawl_job_alive`; `auto` escalates past Cloudflare server-side). Dropped if unrenderable (network error, empty, or no `FIRECRAWL_API_KEY`).
+- `_SPA_CAREER_DOMAINS` (Microsoft careers, `jobs.nvidia.com`, …) — JS-SPA / Eightfold sites that serve a generic shell server-side, so a plain fetch can't tell open from closed. Rendered + liveness-checked via Firecrawl proxy **`"auto"`** (same call path as wellfound — `auto` stays on the cheap proxy when a basic render suffices). Add new SPA ATS domains to this set.
 
 `_firecrawl_job_alive` liveness logic: (1) drop if any `CLOSED_STRINGS` phrase is in the rendered markdown; (2) trust Firecrawl's **focused `extract.job_title`** — NOT the raw markdown, since a dead SPA listing renders a huge generic hub shell that false-matches title tokens. Drop when the extracted title is empty or a dead sentinel (`_DEAD_TITLE_SENTINELS`: "not found"/"no longer"/"404" — e.g. nvidia returns `job_title="Not Found"`), pass only when it token-matches the expected title.
 - `boards.greenhouse.io` redirects — relaxed rule 4: if redirect has `?gh_jid=` or non-generic path, continue to rules 5+6

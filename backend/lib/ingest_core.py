@@ -655,6 +655,17 @@ async def _scrape_startup_listings(profile: ProfileAnalysis) -> list[dict]:
     return listings
 
 
+# Match "intern" only as a whole word (+ "interns"/"internship"/"internships"), NOT as a
+# substring of "Internal", "International", "Internals", etc. A plain `"intern" in title`
+# check let "Internal Audit Lead" / "International Accounting" / "Database Engine Internals"
+# through as fake internships — polluting both the reach and big-tech ATS pools.
+_INTERN_TITLE_RE = re.compile(r"\bintern(?:ship)?s?\b", re.IGNORECASE)
+
+
+def _is_intern_title(title: str) -> bool:
+    return bool(_INTERN_TITLE_RE.search(title or ""))
+
+
 async def _fetch_ats_listings(
     config: list[tuple[str, str, str]] = _BIGTECH_ATS_CONFIG,
 ) -> list[dict]:
@@ -676,7 +687,7 @@ async def _fetch_ats_listings(
                     )
                     if r.status_code == 200:
                         for job in r.json().get("jobs", []):
-                            if "intern" not in job.get("title", "").lower():
+                            if not _is_intern_title(job.get("title", "")):
                                 continue
                             job_id = job.get("id")
                             if not job_id:
@@ -693,7 +704,7 @@ async def _fetch_ats_listings(
                     )
                     if r.status_code == 200:
                         for posting in r.json():
-                            if "intern" not in posting.get("text", "").lower():
+                            if not _is_intern_title(posting.get("text", "")):
                                 continue
                             url = posting.get("hostedUrl", "")
                             if not url:
@@ -709,7 +720,7 @@ async def _fetch_ats_listings(
                     )
                     if r.status_code == 200:
                         for posting in r.json().get("jobPostings", []):
-                            if "intern" not in posting.get("title", "").lower():
+                            if not _is_intern_title(posting.get("title", "")):
                                 continue
                             url = posting.get("jobUrl", "")
                             if not url:
@@ -760,6 +771,12 @@ async def _scrape_bigtech_listings(profile: ProfileAnalysis) -> list[dict]:
     # and their URL format cannot distinguish single-role pages from category landing pages
     # (e.g., "Software Engineering: Internship Opportunities" has the same URL structure
     # as a real job). They appear in reach via Claude-generated suggestions.
+    #
+    # The per-company site: queries below MUST point at the domain where that company's board
+    # actually lives, or DDG indexes nothing. Verified against each provider's public API:
+    # OpenAI is on Ashby (NOT Greenhouse), Anthropic is on Greenhouse (NOT Ashby), and Snowflake
+    # has no public ATS board at all (Workday/Eightfold) — its slot is reused for Cloudflare,
+    # which does (mirrors the REACH_ATS_SLUGS fix). Keep these in sync with config/niches.py.
     queries = [
         f"site:careers.google.com/jobs/results/ intern {field} 2026",
         f"site:metacareers.com/v2/jobs/ intern {field} 2026",
@@ -768,9 +785,9 @@ async def _scrape_bigtech_listings(profile: ProfileAnalysis) -> list[dict]:
         f"site:boards.greenhouse.io/stripe intern {field}",
         f"site:boards.greenhouse.io/databricks intern {field}",
         f"site:jobs.lever.co/palantir intern {field}",
-        f"site:boards.greenhouse.io/openai intern {field}",
-        f"site:jobs.ashbyhq.com/Anthropic intern {field}",
-        f"site:boards.greenhouse.io/snowflake intern {field}",
+        f"site:jobs.ashbyhq.com/openai intern {field}",
+        f"site:boards.greenhouse.io/anthropic intern {field}",
+        f"site:boards.greenhouse.io/cloudflare intern {field}",
     ]
 
     def _run_query(q: str) -> list[dict]:
@@ -987,8 +1004,8 @@ def _title_in_body(expected_title: str, body: str) -> bool:
 async def _firecrawl_job_alive(url: str, expected_title: str, proxy: str) -> tuple[bool, str]:
     """
     Liveness check for Cloudflare-walled / JS-SPA job pages that a plain httpx
-    request can't read. Renders the page with Firecrawl (proxy="stealth" bypasses
-    Cloudflare; "basic" is enough for most SPAs) and inspects the RENDERED content.
+    request can't read. Renders the page with Firecrawl (proxy="auto" — Firecrawl
+    escalates past Cloudflare server-side when blocked) and inspects the RENDERED content.
 
     Policy: if Firecrawl can't render the page (no key / network error / empty),
     DROP — we never surface a link we couldn't actually confirm is live.
@@ -1090,9 +1107,9 @@ async def validate_job_url(url: str | None, expected_title: str) -> tuple[bool, 
 
     if "wellfound.com" in url_domain:
         # Cloudflare 403s every plain client, and active vs. deleted listings look
-        # identical to httpx. Render with Firecrawl stealth (bypasses Cloudflare)
-        # and check the real page; drop if it can't be rendered.
-        is_valid, reason = await _firecrawl_job_alive(url, expected_title, proxy="stealth")
+        # identical to httpx. Render with Firecrawl auto (escalates past Cloudflare
+        # server-side when blocked) and check the real page; drop if it can't be rendered.
+        is_valid, reason = await _firecrawl_job_alive(url, expected_title, proxy="auto")
         set_url_validation_cache(url, is_valid, reason)
         return is_valid, reason
 
@@ -1100,7 +1117,7 @@ async def validate_job_url(url: str | None, expected_title: str) -> tuple[bool, 
         # JS-SPA career site — a server-side fetch sees only a generic shell, so
         # HEAD/body checks can't tell an open listing from a closed one. Render
         # with Firecrawl and check the rendered page; drop if it can't be rendered.
-        is_valid, reason = await _firecrawl_job_alive(url, expected_title, proxy="basic")
+        is_valid, reason = await _firecrawl_job_alive(url, expected_title, proxy="auto")
         set_url_validation_cache(url, is_valid, reason)
         return is_valid, reason
 

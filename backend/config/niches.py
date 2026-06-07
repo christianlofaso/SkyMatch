@@ -55,11 +55,23 @@ REACH_NICHE_KEY = "_reach"
 # Elite companies with public Greenhouse/Lever/Ashby boards, in the (company, provider, slug)
 # shape _fetch_ats_listings expects. Unknown/closed slugs simply yield nothing (handled
 # gracefully), so this list is safe to extend.
+#
+# Each (provider, slug) below was verified live against the provider's public API. Caveats:
+#   - Slugs must point at a board the public API actually serves. Snowflake (Workday/Eightfold)
+#     and Ramp (Ashby board returns 0 postings) have NO usable public ATS API, so they were
+#     dropped — they yielded 0 every pass. Anthropic is on GREENHOUSE ("anthropic"), not Ashby
+#     (the old "ashby/Anthropic" 404'd every pass).
+#   - A board returning 0 interns *right now* is normal (seasonal — e.g. Anthropic has the board
+#     but no open internships this cycle); it'll yield once they post. The dead entries above
+#     were 404/empty at the API level, which is different.
+# To add a company: confirm its public board serves intern roles via the provider API before
+# adding (don't guess the slug — a wrong slug silently yields 0, exactly the bug this replaced).
 REACH_ATS_SLUGS: list[tuple[str, str, str]] = [
     ("Stripe",     "greenhouse", "stripe"),
     ("Databricks", "greenhouse", "databricks"),
-    ("Snowflake",  "greenhouse", "snowflake"),
     ("Palantir",   "lever",      "palantir"),
-    ("Anthropic",  "ashby",      "Anthropic"),
-    ("Ramp",       "ashby",      "ramp"),
+    ("Anthropic",  "greenhouse", "anthropic"),   # was ashby/"Anthropic" (404); Anthropic is on Greenhouse
+    ("Cloudflare", "greenhouse", "cloudflare"),  # replaces Snowflake (no public ATS API)
+    ("Verkada",    "greenhouse", "verkada"),     # replaces Ramp (Ashby board serves 0 postings)
+    ("Pinterest",  "greenhouse", "pinterest"),
 ]

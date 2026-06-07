@@ -3,9 +3,9 @@ Shared Firecrawl client — a single source of truth for both the /analyze fetch
 pipeline (routes/analyze.py) and the internships URL-liveness check
 (routes/internships.py).
 
-Firecrawl renders JavaScript and (in "stealth" proxy mode) bypasses Cloudflare,
-so it's the only way to get a real signal from JS-SPA career sites and
-Cloudflare-walled domains where a plain httpx request sees nothing useful.
+Firecrawl renders JavaScript and (in "auto"/"enhanced" proxy mode) bypasses
+Cloudflare, so it's the only way to get a real signal from JS-SPA career sites
+and Cloudflare-walled domains where a plain httpx request sees nothing useful.
 """
 
 import asyncio
@@ -22,7 +22,22 @@ TIMEOUT_MS = int(os.getenv("FIRECRAWL_TIMEOUT_MS", "90000"))   # total request b
 # schema-extraction step (the "extract"/json format), which alone can run ~30s+ on
 # verbose career pages. At 45000 the combination timed out and the whole scrape
 # returned nothing even though the page fetched fine (HTTP 200) — so keep this >= 90000.
-PROXY_MODE = os.getenv("FIRECRAWL_PROXY_MODE", "basic")        # "basic" | "stealth"
+# "auto" lets Firecrawl pick the cheapest proxy that works and escalate to a
+# Cloudflare-bypassing proxy server-side only when the page is blocked (replaces the
+# old manual basic→stealth retry). "stealth" is the deprecated v1 alias — don't use it.
+PROXY_MODE = os.getenv("FIRECRAWL_PROXY_MODE", "auto")         # "auto" | "basic" | "enhanced"
+
+# Cap simultaneous scrape requests to the plan's concurrent-browser limit (free/hobby = 2;
+# see GET /v2/team/queue-status -> maxConcurrency). The worker fans validation out at
+# _VALIDATE_CONCURRENCY=10 and company-recovery at WORKER_PARSE_CONCURRENCY=8 — far above this —
+# so without a gate the excess QUEUES on Firecrawl's side, and queue-wait counts against our
+# request timeout, producing SCRAPE_TIMEOUT 408s + orphaned dashboard jobs. Bounding here costs
+# ~nothing in throughput (Firecrawl is the bottleneck regardless) and removes the thrash.
+# NOTE: per-process — the worker and each web replica each get their own pool, so under
+# concurrent worker+web load the effective total is N×this (acceptable; Firecrawl just queues
+# the small overflow). Raise this only if you upgrade the Firecrawl plan's maxConcurrency.
+MAX_CONCURRENCY = int(os.getenv("FIRECRAWL_MAX_CONCURRENCY", "2"))
+_slot = asyncio.Semaphore(MAX_CONCURRENCY)
 
 # ── Job extraction schema ───────────────────────────────────────────────────────
 JOB_SCHEMA = {
@@ -75,24 +90,28 @@ async def scrape(url: str, proxy: str) -> dict:
         "timeout": TIMEOUT_MS,
     }
     # One retry on a NETWORK error only (a transient blip). HTTP >= 400 is a real answer
-    # (returns {} below) and is NOT retried; the caller maps it.
+    # (returns {} below) and is NOT retried; the caller maps it. The whole attempt loop runs
+    # under _slot so we never put more than MAX_CONCURRENCY scrapes in flight at once (a retry
+    # reuses the same slot rather than grabbing a second); the slot releases as soon as the HTTP
+    # response is in hand, before the cheap json parse below.
     last_exc: httpx.RequestError | None = None
-    for attempt in range(2):
-        try:
-            async with httpx.AsyncClient(timeout=fc_timeout) as client:
-                resp = await client.post(
-                    f"{BASE_URL}/v1/scrape",
-                    headers={"Authorization": f"Bearer {API_KEY}"},
-                    json=payload,
-                )
-            break
-        except httpx.RequestError as e:
-            last_exc = e
-            if attempt == 0:
-                print(f"[firecrawl] {proxy}: network error, retrying once: {e!r}")
-                await asyncio.sleep(1.0)
-                continue
-            raise last_exc
+    async with _slot:
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=fc_timeout) as client:
+                    resp = await client.post(
+                        f"{BASE_URL}/v1/scrape",
+                        headers={"Authorization": f"Bearer {API_KEY}"},
+                        json=payload,
+                    )
+                break
+            except httpx.RequestError as e:
+                last_exc = e
+                if attempt == 0:
+                    print(f"[firecrawl] {proxy}: network error, retrying once: {e!r}")
+                    await asyncio.sleep(1.0)
+                    continue
+                raise last_exc
     if resp.status_code >= 400:
         print(f"[firecrawl] {proxy}: HTTP {resp.status_code}: {resp.text[:200]}")
         return {}

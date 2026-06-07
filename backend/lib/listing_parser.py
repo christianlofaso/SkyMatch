@@ -106,13 +106,12 @@ def needs_firecrawl_company(url: str, company: str | None) -> bool:
 async def company_from_firecrawl(url: str) -> tuple[str | None, str | None]:
     """Render an SPA job page and pull (company, location) from Firecrawl's JOB_SCHEMA
     extract — the only place the company appears for wellfound/workatastartup listings.
-    'stealth' proxy for wellfound (Cloudflare), 'basic' otherwise. (None, None) on no key /
-    any failure (caller leaves the row as-is)."""
+    Firecrawl 'auto' proxy escalates past Cloudflare (wellfound) server-side when blocked.
+    (None, None) on no key / any failure (caller leaves the row as-is)."""
     if not firecrawl.is_available():
         return None, None
-    proxy = "stealth" if "wellfound.com" in (url or "") else "basic"
     try:
-        data = await firecrawl.scrape(url, proxy)
+        data = await firecrawl.scrape(url, "auto")
     except Exception:
         return None, None
     ex = ((data.get("data") or {}).get("extract") or {}) if data else {}
