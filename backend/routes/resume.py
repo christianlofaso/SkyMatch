@@ -74,7 +74,7 @@ async def from_resume(file: UploadFile = File(...)) -> dict:
     base_req = RunRequest(text=truncated)
     try:
         with cost_session("/profile/from-resume"):
-            base_profile, rich_data = await asyncio.gather(
+            (base_profile, _source), rich_data = await asyncio.gather(
                 analyze_profile(base_req),
                 extract_rich_fields(truncated),
             )

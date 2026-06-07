@@ -61,8 +61,128 @@ def _strip_fences(raw: str) -> str:
     return raw.strip()
 
 
-async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
-    """Core logic — called by both the /profile/analyze route and /run orchestrator."""
+_MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _fmt_linkd_date(d: dict | None) -> str | None:
+    """LinkdAPI {year,month,day} → 'Mon YYYY' (or 'YYYY'); None when year is missing/0."""
+    if not isinstance(d, dict):
+        return None
+    y = d.get("year") or 0
+    if not y:
+        return None
+    m = d.get("month") or 0
+    return f"{_MONTHS[m]} {y}" if 1 <= m <= 12 else str(y)
+
+
+def _linkedin_profile_to_text(raw_profile: dict) -> str:
+    """Flatten a LinkdAPI /profile/full payload into clean, resume-like sectioned TEXT.
+
+    The extraction prompts (PROFILE_SYSTEM + RICH_SYSTEM) handle resume-style prose far
+    better than a raw nested JSON blob. Feeding `json.dumps(raw_profile, indent=2)[:8000]`
+    was doubly broken: (1) ~2/3 of the budget went to image URLs / logos / multiLocale
+    dupes / ids, and (2) the payload is ~24k chars pretty-printed, so the 8000-char cut
+    landed BEFORE the experience descriptions, skills, and certifications — silently
+    dropping skills and 3 of 5 jobs. It also made Sonnet echo/prose-wrap the JSON. Rendering
+    only the meaningful fields keeps the whole profile well under budget AND yields clean
+    JSON back (like the resume path). See docs/gotchas.md.
+    """
+    data = raw_profile.get("data") if isinstance(raw_profile, dict) else None
+    if not isinstance(data, dict):
+        # Unknown shape — degrade to compact JSON rather than crash.
+        return json.dumps(raw_profile)[:12000]
+
+    lines: list[str] = []
+    name = " ".join(x for x in [data.get("firstName"), data.get("lastName")] if x).strip()
+    if name:
+        lines.append(f"Name: {name}")
+    if data.get("headline"):
+        lines.append(f"Headline: {data['headline']}")
+    geo = data.get("geo") or {}
+    if geo.get("full"):
+        lines.append(f"Location: {geo['full']}")
+    if (data.get("industry") or {}).get("name"):
+        lines.append(f"Industry: {data['industry']['name']}")
+    if data.get("summary"):
+        lines.append(f"\nSummary:\n{data['summary']}")
+
+    # fullPositions == position here, but fullPositions is the canonical complete list.
+    positions = data.get("fullPositions") or data.get("position") or []
+    if positions:
+        lines.append("\nExperience:")
+        for p in positions:
+            title = p.get("title") or ""
+            company = p.get("companyName") or ""
+            meta = ", ".join(x for x in [p.get("employmentType"), p.get("location")] if x)
+            start = _fmt_linkd_date(p.get("start"))
+            end_d = p.get("end") or {}
+            end = "Present" if not (end_d.get("year") or 0) else _fmt_linkd_date(end_d)
+            dates = " to ".join(x for x in [start, end] if x)
+            header = f"- {title} at {company}".rstrip()
+            if meta:
+                header += f" ({meta})"
+            if dates:
+                header += f" | {dates}"
+            lines.append(header)
+            desc = (p.get("description") or "").strip()
+            if desc:
+                lines.append(desc)
+
+    educations = data.get("educations") or []
+    if educations:
+        lines.append("\nEducation:")
+        for e in educations:
+            degree_field = ", ".join(x for x in [e.get("degree"), e.get("fieldOfStudy")] if x)
+            start = _fmt_linkd_date(e.get("start"))
+            end = _fmt_linkd_date(e.get("end"))
+            extras = ", ".join(
+                x for x in [e.get("grade"), " to ".join(y for y in [start, end] if y)] if x
+            )
+            header = f"- {e.get('schoolName') or ''}".rstrip()
+            if degree_field:
+                header += f": {degree_field}"
+            if extras:
+                header += f" ({extras})"
+            lines.append(header)
+            if e.get("activities"):
+                lines.append(f"  Activities: {e['activities']}")
+
+    skills = [s.get("name") for s in (data.get("skills") or []) if s.get("name")]
+    if skills:
+        lines.append("\nSkills: " + ", ".join(skills))
+
+    certs = [c.get("name") for c in (data.get("certifications") or []) if c.get("name")]
+    if certs:
+        lines.append("\nCertifications: " + ", ".join(certs))
+
+    vol = data.get("volunteering") or []
+    if vol:
+        lines.append("\nVolunteering:")
+        for v in vol:
+            header = f"- {v.get('title') or ''} at {v.get('companyName') or ''}".rstrip()
+            lines.append(header)
+            d = (v.get("description") or "").strip()
+            if d:
+                lines.append(d)
+
+    honors = [h.get("title") for h in (data.get("honorsAndAwards") or []) if h.get("title")]
+    if honors:
+        lines.append("\nHonors & Awards: " + ", ".join(honors))
+
+    return "\n".join(lines)
+
+
+async def analyze_profile(req: RunRequest) -> tuple[ProfileAnalysis, str]:
+    """Core logic — called by both the /profile/analyze route and /run orchestrator.
+
+    Returns (profile, source_text). `source_text` is the RAW profile data (the full
+    LinkedIn JSON or the pasted text) — NOT the compacted ProfileAnalysis. Callers feed
+    it straight to extract_rich_fields so skills/projects/experience detail survives;
+    distilling to ProfileAnalysis first drops technical-skill context, work descriptions,
+    and projects entirely (ProfileAnalysis has no projects field), which silently empties
+    the rich fields. On a warm-cache hit the raw source is gone, so it falls back to the
+    pasted text or the compacted profile (lossy, but only on that cold-rich-fields path)."""
     if not req.url and not req.text:
         raise ValueError("url or text required")
 
@@ -79,7 +199,9 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
     cache_key = req.url if req.url else text_cache_key(req.text or "")
     cached = await asyncio.to_thread(get_profile_cache, cache_key)
     if cached:
-        return ProfileAnalysis(**cached)
+        # Raw source didn't survive caching. Prefer the pasted text (still raw) when we
+        # have it; otherwise fall back to the compacted profile (lossy rich fields).
+        return ProfileAnalysis(**cached), (req.text or json.dumps(cached))
 
     if req.url:
         username = extract_username(req.url)
@@ -116,7 +238,11 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
                 status_code=504,
                 detail="Timed out fetching your LinkedIn profile. Try again, or paste your profile text.",
             ) from e
-        profile_text = json.dumps(raw_profile, indent=2)[:8000]
+        # Flatten the LinkdAPI JSON into clean resume-like text (NOT a raw json.dumps blob):
+        # the prompts extract far better from prose, and the old indent=2 [:8000] dump
+        # truncated before skills/experience-descriptions ever reached the model. See
+        # _linkedin_profile_to_text. Cap generously; the flattened text is naturally small.
+        profile_text = _linkedin_profile_to_text(raw_profile)[:16000]
     else:
         profile_text = (req.text or "")[:8000]
         # Guard against an empty/too-short paste BEFORE spending an LLM call.
@@ -164,7 +290,7 @@ async def analyze_profile(req: RunRequest) -> ProfileAnalysis:
         ) from exc
 
     await asyncio.to_thread(set_profile_cache, cache_key, result.model_dump())
-    return result
+    return result, profile_text
 
 
 async def extract_rich_fields(source_text: str) -> dict:
@@ -186,8 +312,13 @@ async def extract_rich_fields(source_text: str) -> dict:
         )
     record_usage("profile-rich", MODEL_MID, msg.usage)
     raw = _strip_fences(msg.content[0].text)
-    # Lenient parse: recover the JSON even if the model wraps it in prose.
-    data = parse_json_with_context(raw, "profile-rich")
+    # Lenient parse: recover the JSON even if the model wraps it in prose. expected_keys
+    # makes recovery pick the real answer, not an example object buried in reasoning prose.
+    data = parse_json_with_context(
+        raw, "profile-rich",
+        expected_keys=("skills_with_context", "work_experience", "education",
+                       "projects", "certifications"),
+    )
     print(
         f"[profile-rich] extracted {len(data.get('skills_with_context', []))} skills, "
         f"{len(data.get('work_experience', []))} work entries, "
@@ -200,7 +331,8 @@ async def extract_rich_fields(source_text: str) -> dict:
 async def profile_analyze_route(req: RunRequest):
     try:
         with cost_session("/profile/analyze"):
-            return await analyze_profile(req)
+            profile, _ = await analyze_profile(req)
+            return profile
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except HTTPException:

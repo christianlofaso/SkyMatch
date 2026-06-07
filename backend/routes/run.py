@@ -186,7 +186,10 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
         else:
             try:
                 async with timed("profile: analyze_profile (linkd+claude)"):
-                    base = await analyze_profile(req)
+                    # source_text is the RAW profile data (LinkedIn JSON / pasted text),
+                    # NOT the compacted profile — extract_rich_fields needs the raw
+                    # skills/projects/experience detail or it returns empty (see profile.py).
+                    base, source_text = await analyze_profile(req)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
             except HTTPException:
@@ -194,8 +197,6 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
             except Exception as e:
                 print(f"[run] unexpected error in analyze_profile: {e!r}")
                 raise HTTPException(status_code=500, detail="Couldn't read your profile. Please try again, or paste your profile text.")
-
-            source_text = json.dumps(base.model_dump(), indent=2) if req.url else (req.text or "")[:12000]
 
             try:
                 async with timed("profile: extract_rich_fields (claude)"):
@@ -229,7 +230,10 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
         else:
             try:
                 async with timed("profile: analyze_profile (linkd+claude)"):
-                    base = await analyze_profile(req)
+                    # source_text is the RAW profile data (LinkedIn JSON / pasted text),
+                    # NOT the compacted profile — extract_rich_fields needs the raw
+                    # skills/projects/experience detail or it returns empty (see profile.py).
+                    base, source_text = await analyze_profile(req)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
             except HTTPException:
@@ -237,8 +241,6 @@ async def _resolve_profile(req: RunRequest) -> UnifiedProfile:
             except Exception as e:
                 print(f"[run] unexpected error in analyze_profile: {e!r}")
                 raise HTTPException(status_code=500, detail="Couldn't read your profile. Please try again, or paste your profile text.")
-
-            source_text = json.dumps(base.model_dump(), indent=2) if req.url else (req.text or "")[:12000]
 
             try:
                 async with timed("profile: extract_rich_fields (claude)"):
