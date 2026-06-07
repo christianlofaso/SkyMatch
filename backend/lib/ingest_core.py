@@ -17,6 +17,7 @@ from cache import (
     get_enrichment_cache, set_enrichment_cache,
     get_url_validation_cache, set_url_validation_cache,
 )
+from config.niches import WORKDAY_CONFIG
 from lib import firecrawl
 from schemas import ProfileAnalysis
 
@@ -60,14 +61,16 @@ _PROPRIETARY_ATS = {
 }
 
 
-# Non-proprietary big-tech companies with public ATS APIs.
-# OpenAI omitted — their Greenhouse board returns no intern roles.
+# Non-proprietary big-tech companies with public greenhouse/lever/ashby ATS APIs.
+# OpenAI omitted — their Greenhouse board returns no intern roles. (Workday-based big-tech
+# companies live in config.niches.WORKDAY_CONFIG, fetched via _fetch_workday_listings.)
 _BIGTECH_ATS_CONFIG = [
     ("Stripe",     "greenhouse", "stripe"),
     ("Databricks", "greenhouse", "databricks"),
-    ("Snowflake",  "greenhouse", "snowflake"),
     ("Palantir",   "lever",      "palantir"),
-    ("Anthropic",  "ashby",      "Anthropic"),
+    ("Anthropic",  "greenhouse", "anthropic"),  # was ashby/"Anthropic" (404); Anthropic is on Greenhouse
+    ("AppLovin",   "greenhouse", "applovin"),   # seasonal — board exists, 0 interns off-cycle
+    # Snowflake removed — no public greenhouse/lever/ashby board (Workday); now via WORKDAY_CONFIG.
 ]
 
 
@@ -85,7 +88,10 @@ BLOCKED_DOMAINS = ["linkedin.com", "facebook.com", "twitter.com", "instagram.com
 
 # These domains use JS rendering or login walls — skip body checks (rules 5+6).
 # The HEAD check (rules 3+4) + job-ID gate (rule 2) are sufficient trust signals.
-SKIP_BODY_CHECK_DOMAINS = {"workatastartup.com", "wellfound.com"}
+# myworkdayjobs.com: a React SPA with no title in the server HTML, but its listings come
+# from the authoritative CXS feed (a closed job leaves the feed and is pruned), so the feed
+# itself is the liveness signal — skip the body-token check, just confirm the URL resolves.
+SKIP_BODY_CHECK_DOMAINS = {"workatastartup.com", "wellfound.com", "myworkdayjobs.com"}
 
 # Career sites that render in a JS SPA: a server-side fetch sees only a generic
 # shell, so HEAD/body checks can't tell an open listing from a closed one.
@@ -666,6 +672,109 @@ def _is_intern_title(title: str) -> bool:
     return bool(_INTERN_TITLE_RE.search(title or ""))
 
 
+# CS/engineering relevance allowlist for the Workday feed. Workday's searchText="intern" pulls
+# a company's ENTIRE intern class (finance, marketing, HR, supply-chain, legal, comms, …), but
+# the big_tech bucket is NOT off-field-filtered at serve time and is assumed field-curated. So
+# keep only software/hardware/data/ML/EE-type roles at ingest — this both matches the product's
+# CS/ECE audience and bounds the Haiku parse cost (fewer rows stored). Positive allowlist (not a
+# denylist) since Workday off-field functions are too numerous to enumerate. Word-boundaried.
+_TECH_INTERN_RE = re.compile(
+    r"\b(software|engineer\w*|developer|hardware|firmware|embedded|silicon|asic|fpga|"
+    r"verification|vlsi|systems?|security|devops|sre|cloud|infrastructure|computer|"
+    r"electrical|electronics|data|machine\s+learning|\bml\b|\bai\b|robotics|backend|"
+    r"frontend|full[-\s]?stack|platform|network\w*|database|\bqa\b|test|research\s+scientist|"
+    r"applied\s+scientist|technical|programming|developer|analytics)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_tech_intern_title(title: str) -> bool:
+    return bool(_TECH_INTERN_RE.search(title or ""))
+
+
+# Workday's CXS `searchText` is honored by SOME tenants (results are pre-filtered to interns) but
+# IGNORED by others (the endpoint returns the company's ENTIRE job board, unsorted). So we always
+# client-filter titles, and bound BOTH the kept-results count AND the pages scanned — the latter
+# stops us from paginating a 1000-job board for a company that has no current interns.
+_WORKDAY_MAX_PER_COMPANY = 40   # max intern listings KEPT per company (caps index + Haiku cost)
+_WORKDAY_MAX_PAGES = 10         # max CXS pages scanned per company (×20 jobs) — request bound
+
+
+async def _fetch_workday_listings(
+    config: list[tuple[str, str, str, str]] = WORKDAY_CONFIG,
+) -> list[dict]:
+    """Query Workday's public, unauthenticated CXS JSON API for intern listings.
+
+    `config` is a list of (company, tenant, wdN, siteId) tuples. POSTs the CXS jobs endpoint
+    with searchText="intern", paginates via offset, and returns intern listings in the same
+    {url, search_title, snippet} shape as _fetch_ats_listings — so the downstream
+    enrich/validate/store/parse chain is identical. Two filters are applied: _is_intern_title
+    (Workday substring-matches "internal") and _is_tech_intern_title (CS/eng relevance — the
+    big_tech bucket has no serve-time off-field filter). All companies run in parallel; per-company
+    failures (a moved tenant/shard 404s, network blip) are swallowed so one bad tenant can't break
+    the pass.
+    """
+    async def _fetch_one(company: str, tenant: str, wdn: str, site_id: str) -> list[dict]:
+        results: list[dict] = []
+        base = f"https://{tenant}.{wdn}.myworkdayjobs.com"
+        endpoint = f"{base}/wday/cxs/{tenant}/{site_id}/jobs"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                offset = 0
+                for _page in range(_WORKDAY_MAX_PAGES):
+                    if len(results) >= _WORKDAY_MAX_PER_COMPANY:
+                        break
+                    r = await client.post(
+                        endpoint,
+                        headers={"Content-Type": "application/json", "Accept": "application/json"},
+                        json={"appliedFacets": {}, "limit": 20, "offset": offset, "searchText": "intern"},
+                    )
+                    if r.status_code != 200:
+                        break
+                    data = r.json()
+                    postings = data.get("jobPostings") or []
+                    if not postings:
+                        break
+                    for p in postings:
+                        title = (p.get("title") or "").strip()
+                        if not _is_intern_title(title) or not _is_tech_intern_title(title):
+                            continue
+                        ext = p.get("externalPath") or ""
+                        if not ext:
+                            continue
+                        # externalPath starts with "/job/..."; public URL = base/{siteId}{externalPath}
+                        url = f"{base}/{site_id}{ext}"
+                        results.append({
+                            "url": url,
+                            "search_title": f"{title} at {company}",
+                            "snippet": p.get("locationsText") or "",
+                        })
+                        if len(results) >= _WORKDAY_MAX_PER_COMPANY:
+                            break
+                    total = data.get("total") or 0
+                    offset += 20
+                    if offset >= total:
+                        break
+        except Exception as e:
+            print(f"[workday-ats] {company} error: {e}")
+        print(f"[workday-ats] {company}/{tenant} -> {len(results)} intern listings")
+        return results
+
+    batches = await asyncio.gather(*[
+        _fetch_one(c, t, w, s) for c, t, w, s in config
+    ])
+    seen: set[str] = set()
+    listings: list[dict] = []
+    for batch in batches:
+        for item in batch:
+            url = item["url"].rstrip("/")
+            if url not in seen:
+                seen.add(url)
+                listings.append(item)
+    print(f"[workday-ats] total: {len(listings)} listings across {len(config)} companies")
+    return listings
+
+
 async def _fetch_ats_listings(
     config: list[tuple[str, str, str]] = _BIGTECH_ATS_CONFIG,
 ) -> list[dict]:
@@ -751,10 +860,16 @@ async def _fetch_ats_listings(
 
 
 async def _fetch_bigtech_ats_listings(profile: ProfileAnalysis) -> list[dict]:
-    """Thin back-compat wrapper for the live big-tech scrape (profile is unused —
-    the listing set is fixed by _BIGTECH_ATS_CONFIG). Preserves the original call
-    signature so _scrape_bigtech_listings is unchanged."""
-    return await _fetch_ats_listings()
+    """Thin back-compat wrapper for the live big-tech scrape (profile is unused — the listing
+    set is fixed by _BIGTECH_ATS_CONFIG + WORKDAY_CONFIG). Preserves the original call signature
+    so _scrape_bigtech_listings is unchanged. Gathers BOTH the greenhouse/lever/ashby ATS pool
+    and the Workday CXS pool (the bulk of the mega-cap tech set); _scrape_bigtech_listings dedups
+    the merged set by URL."""
+    ats, workday = await asyncio.gather(
+        _fetch_ats_listings(),
+        _fetch_workday_listings(),
+    )
+    return ats + workday
 
 
 async def _scrape_bigtech_listings(profile: ProfileAnalysis) -> list[dict]:
@@ -977,6 +1092,14 @@ def _is_generic_url(url: str) -> tuple[bool, str]:
     ):
         return True, "application_form_url"
 
+    # Workday CXS job URLs (.../{siteId}/job/.../<Title>_JR12345) carry the job id as a
+    # "_JR<digits>" suffix that _JOB_ID_RE (which wants /<5+ digits> or a UUID) doesn't match,
+    # so they'd be wrongly dropped as "no_job_id_in_url". The "/job/" path segment is the
+    # reliable Workday listing marker (the board root /{siteId} has no "/job/"). Accept it here;
+    # validate_job_url confirms liveness for myworkdayjobs.com via the skip-body branch.
+    if host.endswith("myworkdayjobs.com") and "/job/" in path:
+        return False, ""
+
     # A real listing URL contains a numeric job ID (≥5 digits) or a UUID.
     # University landing pages, emerging-talent hubs, and internship overview pages
     # all have human-readable paths with no ID — drop them.
@@ -1102,6 +1225,23 @@ async def validate_job_url(url: str | None, expected_title: str) -> tuple[bool, 
                 return False, "redirect_off_domain"
         except Exception:
             pass  # network error → accept, trust the job ID from rule 2
+        set_url_validation_cache(url, True, "pass_skip_body")
+        return True, "pass_skip_body"
+
+    if url_domain.endswith("myworkdayjobs.com"):
+        # Workday job pages are React SPAs (no title in server HTML → body-token check would
+        # falsely drop them), but the CXS feed they came from is the authoritative liveness
+        # signal (a closed job leaves the feed and is pruned). Skip the body check; one GET
+        # confirms the URL still resolves. Mirror the workatastartup trusted-feed branch.
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+                resp = await client.get(url)
+            if resp.status_code >= 400:
+                reason = f"http_{resp.status_code}"
+                set_url_validation_cache(url, False, reason)
+                return False, reason
+        except Exception:
+            pass  # network error → accept, trust the CXS feed
         set_url_validation_cache(url, True, "pass_skip_body")
         return True, "pass_skip_body"
 

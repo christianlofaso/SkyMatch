@@ -75,3 +75,48 @@ REACH_ATS_SLUGS: list[tuple[str, str, str]] = [
     ("Verkada",    "greenhouse", "verkada"),     # replaces Ramp (Ashby board serves 0 postings)
     ("Pinterest",  "greenhouse", "pinterest"),
 ]
+
+# ── Workday big-tech pool ────────────────────────────────────────────────────
+# Large-cap tech companies whose internships live on Workday (the majority of the
+# mega-cap set — Apple/Microsoft are on proprietary portals with no public API and are
+# intentionally excluded). These feed the SAME national big_tech bucket as _BIGTECH_ATS_CONFIG.
+#
+# Workday exposes an UNAUTHENTICATED public JSON API ("CXS"):
+#   POST https://{tenant}.{wdN}.myworkdayjobs.com/wday/cxs/{tenant}/{siteId}/jobs
+#   body {"appliedFacets":{},"limit":20,"offset":0,"searchText":"intern"}
+# → {total, jobPostings[{title, externalPath, locationsText, ...}]}. lib.ingest_core
+# ._fetch_workday_listings iterates these. The public job URL is
+#   https://{tenant}.{wdN}.myworkdayjobs.com/{siteId}{externalPath}.
+#
+# Each (company, tenant, wdN, siteId) below was VERIFIED live against the CXS jobs endpoint.
+# A wrong tenant/wdN/siteId silently yields 0 (same trap as a wrong REACH_ATS_SLUGS slug) —
+# never guess; confirm with scripts/discover_workday_tenants.py (it prints a tuple only on a
+# live 200). wdN (the shard, wd1/wd3/wd5/...) and siteId vary per company and can drift.
+# NOTE: the CXS response's `total` field is unreliable (some tenants report 0 while still
+# returning real postings), and `searchText="intern"` is honored by some tenants but ignored by
+# others (they return the whole board) — so _fetch_workday_listings always client-filters titles
+# and bounds pages scanned. The intern counts below are point-in-time (verified June 2026); a
+# real board with 0 interns now is seasonal and will populate when a cohort posts.
+WORKDAY_CONFIG: list[tuple[str, str, str, str]] = [
+    # — producing CS/eng intern roles now —
+    ("Nvidia",          "nvidia",        "wd5",  "NvidiaExternalCareerSite"),  # ~27
+    ("Intel",           "intel",         "wd1",  "External"),                  # ~31
+    ("Analog Devices",  "analogdevices", "wd1",  "External"),                  # ~20
+    ("Applied Materials","amat",         "wd1",  "External"),                  # ~9
+    ("Micron",          "micron",        "wd1",  "External"),                  # ~5
+    ("Adobe",           "adobe",         "wd5",  "external_experienced"),      # ~4 (external_university is empty)
+    ("Autodesk",        "autodesk",      "wd1",  "uni"),                       # ~4 (university board)
+    ("KLA",             "kla",           "wd1",  "Search"),                    # ~2
+    ("Cisco",           "cisco",         "wd5",  "Cisco_Careers"),             # ~1
+    # — real boards, 0 interns this cycle (seasonal — will populate on next cohort) —
+    ("Broadcom",        "broadcom",      "wd1",  "External_Career"),
+    ("CrowdStrike",     "crowdstrike",   "wd5",  "CrowdStrikeCareers"),
+    ("Salesforce",      "salesforce",    "wd12", "External_Career_Site"),
+    ("PayPal",          "paypal",        "wd1",  "jobs"),
+    ("Workday",         "workday",       "wd5",  "workday"),
+    # NOT reachable via Workday (excluded): Apple/Microsoft (proprietary, no public API);
+    # AMD (iCIMS), Lam Research (Eightfold), Palo Alto Networks + ServiceNow (SmartRecruiters),
+    # Synopsys (Avature), Oracle + Fortinet + Texas Instruments (Oracle Cloud HCM), IBM + Intuit +
+    # Snowflake (custom portals). Qualcomm is on Workday but its public siteId returns 0 postings —
+    # re-resolve with scratch/discover_workday_tenants.py if it should be added.
+]
