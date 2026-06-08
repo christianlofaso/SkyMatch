@@ -31,7 +31,7 @@ from schemas import (
 )
 # The local live-fetch fallback (uncovered metros) reuses the profile-independent
 # scrape/validate helpers from lib.ingest_core (the same ones the ingestion worker uses).
-from lib.ingest_core import _scrape_local_listings, _parse_metro, validate_job_url
+from lib.ingest_core import _scrape_local_listings, _parse_metro, validate_job_url, _is_us_location
 
 router = APIRouter()
 # The Anthropic client (shared, max_retries raised) AND the global Sonnet concurrency
@@ -319,6 +319,14 @@ _PRESELECT = 18
 # sync with listing_parser.ROLE_CATEGORIES.
 _OFF_FIELD_CATEGORIES = {"finance", "sales", "marketing", "recruiting", "audit"}
 _OFF_FIELD_BUCKETS = {"reach", "local"}
+# US-location gate: big_tech is a national pool served to US students, but its Workday/ATS
+# feeds return plenty of overseas intern roles (Intel Costa-Rica/Malaysia, ADI Philippines/
+# Thailand) — genuine non-fits that score below 50. Drop them at serve time on the resolved
+# location (see lib.ingest_core._is_us_location — permissive, drops only on an explicit non-US
+# token). Serve-time placement catches rows already in the index + ATS-sourced rows, not just
+# the ones the ingestion gate stops going forward. startup is left out (curated by hand) and
+# reach is intentionally global; only big_tech needs this.
+_US_LOCATION_BUCKETS = {"big_tech"}
 # Deterministic title backstop for the off-field gate — catches UNPARSED rows (a metro's
 # index still warming, before the worker's parse pass sets role_category) + parse misses,
 # exactly like _PHD_TITLE_RE does for the PhD gate. Without it, an unparsed Marketing/Sales
@@ -420,6 +428,13 @@ def _prefilter_and_rank(
             or _OFF_FIELD_TITLE_RE.search(title)
         ):
             continue
+        # US-location gate (big_tech): drop overseas roles. Location source, in order of
+        # fidelity: parsed.location → verified_location → snippet (Workday's locationsText
+        # lands in snippet for unparsed rows). Permissive — keeps ambiguous/missing locations.
+        if bucket in _US_LOCATION_BUCKETS:
+            loc = (p.get("location") if p else None) or l.get("verified_location") or l.get("snippet")
+            if not _is_us_location(loc):
+                continue
         kept.append(l)
 
     # 2. Cosine rank when we have a query vector; otherwise leave order unchanged.

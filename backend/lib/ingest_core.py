@@ -6,6 +6,7 @@ the worker importing the FastAPI router or the Anthropic client. internships.py
 re-imports these names, so live serving behavior is unchanged.
 """
 import asyncio
+import html
 import json
 import os
 import re
@@ -288,6 +289,62 @@ def _parse_metro(location: str) -> str:
     return city_raw
 
 
+# Non-US location tokens for the big_tech location gate (Fix: international-role dilution).
+# The national big_tech pool is served to US students, but Workday's CXS feed returns plenty
+# of overseas intern roles (Intel Costa-Rica/Malaysia, Analog Devices Philippines/Thailand) —
+# genuine non-fits that score below 50. We can't enumerate every US location, so the heuristic
+# is INVERTED: drop only on an EXPLICIT non-US signal, keep everything ambiguous. Country names
+# are the reliable signal — Workday's `locationsText` includes the country for foreign roles
+# ("Cavite, Philippines"); a few unambiguous foreign tech hubs are added for feeds that omit it.
+# Erring toward KEEP avoids nuking valid US rows whose location is "Multiple Locations" / a bare
+# city. US-city collisions (Manchester, Birmingham, ...) are deliberately NOT listed — relying on
+# the country token, not the city, prevents false drops. Matched word-boundaried, lowercased.
+_NON_US_TOKENS: frozenset[str] = frozenset({
+    # Countries
+    "india", "china", "malaysia", "philippines", "thailand", "vietnam", "indonesia",
+    "singapore", "japan", "korea", "south korea", "taiwan", "hong kong",
+    "canada", "mexico", "brazil", "argentina", "chile", "colombia", "costa rica",
+    "united kingdom", "england", "scotland", "ireland", "france", "germany", "spain",
+    "italy", "netherlands", "belgium", "switzerland", "sweden", "norway", "denmark",
+    "finland", "poland", "austria", "portugal", "czech", "romania", "hungary",
+    "israel", "turkey", "egypt", "saudi arabia", "united arab emirates", "uae",
+    "australia", "new zealand", "south africa", "nigeria", "kenya",
+    # Unambiguous foreign tech hubs (for feeds that omit the country)
+    "bengaluru", "bangalore", "hyderabad", "pune", "gurgaon", "gurugram", "noida",
+    "chennai", "mumbai", "delhi", "shanghai", "beijing", "shenzhen", "guangzhou",
+    "penang", "kulim", "cavite", "manila", "bangkok", "ho chi minh", "hanoi",
+    "tel aviv", "haifa", "zurich", "geneva", "munich", "berlin", "dublin", "cork",
+    "toronto", "vancouver", "montreal", "ottawa", "taipei", "hsinchu",
+    "seoul", "tokyo", "osaka", "sydney", "melbourne", "guadalajara", "sao paulo",
+})
+_NON_US_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(t) for t in _NON_US_TOKENS) + r")\b", re.IGNORECASE,
+)
+# Positive US signal — overrides a non-US token match so a US city that happens to share a name
+# with a foreign hub (Dublin CA, Vancouver WA, Paris TX, Berlin CT) is KEPT. Two forms only, both
+# unambiguous: a comma-anchored 2-letter state code ("Santa Clara, CA") and an explicit country
+# name. The comma anchor is deliberate — a bare 2-letter scan would misread "Dublin OR London" as
+# Oregon. (Full state names like "Texas" are not matched; the ", TX" form is what feeds emit.)
+_US_SIGNAL_RE = re.compile(
+    r",\s*(?:" + "|".join(_STATE_FALLBACK.keys()) + r")\b"
+    r"|\b(?:united states|u\.?\s?s\.?\s?a)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_us_location(loc: str | None) -> bool:
+    """Heuristic US-location gate for the national big_tech pool. Order: empty/ambiguous → keep;
+    an explicit US signal (", ST" / "United States") → keep even if a foreign city token also
+    matches; an explicit non-US token (see _NON_US_TOKENS) → drop; otherwise → keep. Deliberately
+    permissive — better to serve a rare ambiguous foreign role than to drop valid US rows whose
+    location string is vague."""
+    if not loc or not loc.strip():
+        return True
+    if _US_SIGNAL_RE.search(loc):
+        return True
+    return not _NON_US_RE.search(loc)
+
+
 def _is_category_title(title: str) -> bool:
     """Return True if title describes a multi-role category page, not a specific role.
 
@@ -462,6 +519,29 @@ async def _find_via_ats(title: str, company: str) -> str | None:
     return None
 
 
+# Max chars of a fetched JD body we keep in `snippet` for the parse pass. The body is the
+# richest signal for skill extraction (most big_tech rows otherwise carry only a location
+# string → Haiku finds no skills). Bounded so the Haiku parse input + Voyage embed stay cheap;
+# the top of a JD (responsibilities + qualifications) is where the skills are.
+_BODY_MAX_CHARS = 3000
+
+
+def _html_to_text(raw: str | None) -> str | None:
+    """Strip an HTML JD body (Greenhouse `content`, Workday `jobDescription`) to bounded plain
+    text suitable for the listing parser. Drops script/style, unescapes entities, collapses all
+    whitespace (incl. the \\xa0 nbsp Workday emits). None when there's nothing usable."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    # Unescape FIRST: Greenhouse `content` is HTML-ESCAPED (&lt;h2&gt;…), so tag-stripping before
+    # unescape would no-op and leave the tags after a later unescape. Workday/Lever HTML is
+    # literal, where unescape-first is a harmless no-op on the tags. Then strip, then collapse.
+    text = html.unescape(raw)
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = " ".join(text.split())
+    return text[:_BODY_MAX_CHARS] or None
+
+
 async def _enrich_listing(listing: dict, sem: asyncio.Semaphore) -> dict:
     """Enrich a scraped listing with verified_location and is_category_page.
 
@@ -484,6 +564,9 @@ async def _enrich_listing(listing: dict, sem: asyncio.Semaphore) -> dict:
         host = parsed.netloc.lower()
 
         verified_location: str | None = None
+        # JD body captured from the source API → stored into `snippet` so the parse pass has real
+        # text to extract skills from (most big_tech rows otherwise carry only a location string).
+        jd_body: str | None = None
         is_category_page = _is_category_title(listing.get("search_title", ""))
 
         # URL-structure category signals — no HTTP needed
@@ -507,6 +590,7 @@ async def _enrich_listing(listing: dict, sem: asyncio.Semaphore) -> dict:
                         if r.status_code == 200:
                             data = r.json()
                             verified_location = (data.get("location") or {}).get("name")
+                            jd_body = _html_to_text(data.get("content"))  # HTML-escaped JD
                 except Exception:
                     pass
 
@@ -523,8 +607,37 @@ async def _enrich_listing(listing: dict, sem: asyncio.Semaphore) -> dict:
                         if r.status_code == 200:
                             data = r.json()
                             verified_location = (data.get("categories") or {}).get("location")
+                            # Lever ships both; descriptionPlain is already plain text.
+                            jd_body = data.get("descriptionPlain") or _html_to_text(data.get("description"))
                 except Exception:
                     pass
+
+        # ── Workday: public CXS JSON API (the page GET is a useless JS shell) ──
+        elif "myworkdayjobs.com" in host:
+            # Reconstruct the CXS detail endpoint from the public URL:
+            #   https://{tenant}.{wdN}.myworkdayjobs.com/{siteId}{/job/...}
+            #   → https://{tenant}.{wdN}.myworkdayjobs.com/wday/cxs/{tenant}/{siteId}{/job/...}
+            # jobPostingInfo carries the full HTML jobDescription + a clean location. Without
+            # this, Workday rows parse from the title alone → no skills (the biggest skill-less
+            # big_tech source). The fetcher left locationsText in `snippet` as a location fallback.
+            parts = [p for p in parsed.path.split("/") if p]
+            tenant = host.split(".")[0]
+            if parts and tenant:
+                site_id, ext = parts[0], "/" + "/".join(parts[1:])
+                detail = f"https://{host}/wday/cxs/{tenant}/{site_id}{ext}"
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r = await client.get(detail, headers={"Accept": "application/json"})
+                        if r.status_code == 200:
+                            info = (r.json() or {}).get("jobPostingInfo") or {}
+                            jd_body = _html_to_text(info.get("jobDescription"))
+                            loc = info.get("location")
+                            if isinstance(loc, str) and loc.strip():
+                                verified_location = loc.strip()
+                except Exception:
+                    pass
+            if not verified_location:  # detail failed — keep the fetcher's locationsText
+                verified_location = (listing.get("snippet") or "").strip() or None
 
         # ── All other domains: GET + JSON-LD + body signals ──────────────
         else:
@@ -597,6 +710,12 @@ async def _enrich_listing(listing: dict, sem: asyncio.Semaphore) -> dict:
             "verified_location": verified_location,
             "is_category_page": is_category_page,
         }
+        # Replace the location-only snippet with the JD body when we captured one, so the parse
+        # pass (which reads `snippet`) can extract skills, and the embedding is richer. Cached in
+        # the enriched payload so it survives the merge below AND re-applies on a cache hit. When
+        # no body was found, the key is omitted and the original snippet flows through unchanged.
+        if jd_body:
+            enriched["snippet"] = jd_body
         set_enrichment_cache(url, enriched)
         return {**listing, **enriched}
 
@@ -738,6 +857,11 @@ async def _fetch_workday_listings(
                     for p in postings:
                         title = (p.get("title") or "").strip()
                         if not _is_intern_title(title) or not _is_tech_intern_title(title):
+                            continue
+                        # Drop non-US roles: big_tech is a national pool served to US students,
+                        # and the CXS feed is full of overseas interns. locationsText reliably
+                        # carries the country for foreign roles (see _is_us_location).
+                        if not _is_us_location(p.get("locationsText")):
                             continue
                         ext = p.get("externalPath") or ""
                         if not ext:

@@ -971,6 +971,59 @@ def _job_text_from_listing(row: dict) -> str | None:
     return "\n".join(lines)
 
 
+def _requirements_from_listing(row: dict) -> tuple[JobSummary, list[_RequirementItem]] | None:
+    """Build (summary, requirements) for a served internship DIRECTLY from the worker's
+    precomputed listing_store parse — NO live fetch, NO Sonnet extract. Used by the batch
+    score-badge path (/analyze/batch): the served listings are SPAs (Workday/Wellfound/
+    workatastartup) whose live fetch goes through the 2-wide, ~90s Firecrawl gate, and the
+    worker ALREADY extracted structured `skills` at ingest. Re-deriving them by running the
+    extractor LLM over a thin metadata pseudo-JD is both wasteful AND flaky — it returns an
+    empty requirement list for sparse rows, surfacing as EXTRACTION_FAILED cards. Synthesizing
+    requirements from the parse here is deterministic and always yields a scoreable card.
+
+    Returns None only when the row has no usable identity at all (caller falls back to a live
+    fetch + extract). Note: ~half of big_tech rows have no parsed `skills` (Workday CXS exposes
+    only title + location, no JD body), so those score against ONE coarse role-derived
+    requirement — a known limitation of serving from the index without the full JD."""
+    parsed: dict = {}
+    raw = row.get("parsed_json")
+    if raw:
+        try:
+            parsed = json.loads(raw) or {}
+        except (json.JSONDecodeError, TypeError):
+            parsed = {}
+
+    title = (parsed.get("title") or row.get("search_title") or "").strip()
+    company = (parsed.get("company") or row.get("company") or "").strip() or "Unknown"
+    skills = parsed.get("skills") if isinstance(parsed.get("skills"), list) else []
+    role_category = parsed.get("role_category")
+
+    if not title and company == "Unknown":
+        return None  # nothing to score on — let the caller try a live fetch
+
+    reqs: list[_RequirementItem] = [
+        _RequirementItem(requirement=str(s).strip(), type="technical", must_have=False)
+        for s in skills if str(s).strip()
+    ]
+    if parsed.get("requires_phd") is True:
+        reqs.append(_RequirementItem(requirement="PhD enrollment", type="education", must_have=True))
+    if not reqs:
+        # Skills-less parse (thin source page): synthesize one coarse domain requirement from the
+        # role category / title so the card still gets a (coarse) score instead of EXTRACTION_FAILED.
+        cat = (role_category or "software engineering").replace("_", " ")
+        reqs.append(_RequirementItem(
+            requirement=f"Relevant background for a {cat} internship" + (f" ({title})" if title else ""),
+            type="domain", must_have=False,
+        ))
+
+    summary = JobSummary(
+        title=title or "Internship",
+        company=company,
+        key_requirements=[r.requirement for r in reqs][:8],
+    )
+    return summary, reqs
+
+
 async def _resolve_job(
     profile_unused: UnifiedProfile,  # reserved for future per-user URL rewriting
     job_url: str | None,
@@ -1570,20 +1623,49 @@ async def _quick_for_one(
 ) -> QuickAnalysisResponse:
     """Per-job quick analysis used by /analyze/batch.
     Cache hits return without acquiring the LLM semaphore."""
-    job_text, fetch_result, job_id = await _resolve_job(profile, job.url, job.text)
-
     profile_json = profile.model_dump_json()
-    cache_key = analysis_cache_key("quick", profile_json, job_id)
-    cached = await asyncio.to_thread(_get_user_analysis_cache, cache_key)
-    if cached:
-        print(f"[batch] user_cache=hit key={cache_key[:24]}…")
-        record_cache_hit("analysis:quick", MODEL_QUICK)  # repeat-search score served from SQLite
-        return QuickAnalysisResponse(**cached)
+    has_url = bool(job.url and job.url.strip())
+
+    summary: JobSummary | None = None
+    requirements: list[_RequirementItem] | None = None
+    fetch_result: _FetchResult | None = None
+
+    # Index-first (batch score-badge path): served internships are already parsed in
+    # listing_store. Score from those structured fields — skipping BOTH the slow live SPA fetch
+    # (Workday/Wellfound through the 2-wide, ~90s Firecrawl gate) AND the Sonnet extract (which
+    # is flaky on a thin metadata pseudo-JD → EXTRACTION_FAILED). The URL-based job_id is
+    # fetch-independent, so we can check the per-user cache before touching the index. Falls
+    # through to the live fetch + extract only for a URL not in the index or pasted text.
+    if has_url:
+        job_id = _compute_job_id(job.url, "")
+        cache_key = analysis_cache_key("quick", profile_json, job_id)
+        cached = await asyncio.to_thread(_get_user_analysis_cache, cache_key)
+        if cached:
+            print(f"[batch] user_cache=hit key={cache_key[:24]}…")
+            record_cache_hit("analysis:quick", MODEL_QUICK)  # repeat-search score served from SQLite
+            return QuickAnalysisResponse(**cached)
+        row = await asyncio.to_thread(get_listing_by_url, job.url)
+        built = _requirements_from_listing(row) if row else None
+        if built:
+            summary, requirements = built
+            print(f"[analyze] quick path=listing_index url={job.url[:60]}")
+
+    if requirements is None:
+        # Not in the index (or pasted text): live fetch + Sonnet extract.
+        job_text, fetch_result, job_id = await _resolve_job(profile, job.url, job.text)
+        cache_key = analysis_cache_key("quick", profile_json, job_id)
+        if not has_url:  # url path already checked the cache above
+            cached = await asyncio.to_thread(_get_user_analysis_cache, cache_key)
+            if cached:
+                print(f"[batch] user_cache=hit key={cache_key[:24]}…")
+                record_cache_hit("analysis:quick", MODEL_QUICK)
+                return QuickAnalysisResponse(**cached)
 
     async with sem:
-        summary, requirements = await extract_requirements(job_text)
-        if not requirements:
-            raise HTTPException(status_code=422, detail="Could not find job requirements in the page.")
+        if requirements is None:
+            summary, requirements = await extract_requirements(job_text)
+            if not requirements:
+                raise HTTPException(status_code=422, detail="Could not find job requirements in the page.")
         fit_score, verdict = await asyncio.to_thread(_run_quick_verdict, profile, requirements)
 
     quick = QuickAnalysisResponse(
