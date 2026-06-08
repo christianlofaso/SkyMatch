@@ -347,6 +347,12 @@ def _is_us_location(loc: str | None) -> bool:
         return True
     if _US_SIGNAL_RE.search(loc):
         return True
+    # Amazon-style "City, Region, COUNTRYCODE": a trailing UPPERCASE 3-letter ISO code that isn't
+    # USA (USA is caught as a US signal above) reliably marks a non-US row the name/city token list
+    # may miss (e.g. "Luxembourg, LUX"). US locations use 2-letter state codes, never a trailing
+    # ", XXX", so this can't false-drop a US row.
+    if re.search(r",\s*[A-Z]{3}\s*$", loc):
+        return False
     return not _NON_US_RE.search(loc)
 
 
@@ -643,6 +649,39 @@ async def _enrich_listing(listing: dict, sem: asyncio.Semaphore) -> dict:
                     pass
             if not verified_location:  # detail failed — keep the fetcher's locationsText
                 verified_location = (listing.get("snippet") or "").strip() or None
+
+        # ── Amazon: public search.json API (the per-job .json route 406s) ──
+        elif "amazon.jobs" in host:
+            # amazon.jobs rows come from DDG with only a snippet → no skills. The per-job .json
+            # endpoint is bot-blocked (406), but search.json is open and base_query={numeric id}
+            # returns that exact job (matched on id_icims). The skills live in the qualifications,
+            # so they lead the body. country_code/normalized_location also gives a clean location.
+            parts = [p for p in parsed.path.split("/") if p]
+            job_id = parts[2] if len(parts) >= 3 and parts[1] == "jobs" else None
+            if job_id:
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        r = await client.get(
+                            f"https://www.amazon.jobs/en/search.json?base_query={job_id}&result_limit=5",
+                            headers={"User-Agent": (
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                            ), "Accept": "application/json"},
+                        )
+                        if r.status_code == 200:
+                            jobs = (r.json() or {}).get("jobs") or []
+                            job = next((j for j in jobs if str(j.get("id_icims")) == str(job_id)), None)
+                            if job:
+                                jd_body = _html_to_text("\n".join(filter(None, [
+                                    job.get("basic_qualifications"),
+                                    job.get("preferred_qualifications"),
+                                    job.get("description"),
+                                ])))
+                                loc = job.get("normalized_location") or job.get("location")
+                                if isinstance(loc, str) and loc.strip():
+                                    verified_location = loc.strip()
+                except Exception:
+                    pass
 
         # ── All other domains: GET + JSON-LD + body signals ──────────────
         else:
