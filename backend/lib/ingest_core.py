@@ -320,14 +320,19 @@ _NON_US_TOKENS: frozenset[str] = frozenset({
 _NON_US_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(t) for t in _NON_US_TOKENS) + r")\b", re.IGNORECASE,
 )
-# Positive US signal — overrides a non-US token match so a US city that happens to share a name
-# with a foreign hub (Dublin CA, Vancouver WA, Paris TX, Berlin CT) is KEPT. Two forms only, both
-# unambiguous: a comma-anchored 2-letter state code ("Santa Clara, CA") and an explicit country
-# name. The comma anchor is deliberate — a bare 2-letter scan would misread "Dublin OR London" as
-# Oregon. (Full state names like "Texas" are not matched; the ", TX" form is what feeds emit.)
+# Positive US signal — overrides a non-US token match so a US place that happens to share a name
+# with a foreign one is KEPT. Forms, all unambiguous:
+#   - a comma-anchored 2-letter state code ("Santa Clara, CA"). The comma anchor is deliberate — a
+#     bare 2-letter scan would misread "Dublin OR London" as Oregon.
+#   - an explicit country marker: "United States", "USA", or a standalone "US"/"U.S." country code
+#     (Workday/Amazon emit "US, New Mexico, Albuquerque" / "US-Oregon-Hillsboro" / "US / Canada").
+#   - "New Mexico" by name: the one US STATE whose name contains a non-US TOKEN ("mexico"), so
+#     without this the country-token match would wrongly drop legit Albuquerque/Rio Rancho roles.
+# \bus\b can't false-match inside words (Belarus/Mauritius have no boundary before "us"); a stray
+# "us" only ever KEEPS a row, which is the safe/permissive direction.
 _US_SIGNAL_RE = re.compile(
     r",\s*(?:" + "|".join(_STATE_FALLBACK.keys()) + r")\b"
-    r"|\b(?:united states|u\.?\s?s\.?\s?a)\b",
+    r"|\b(?:united states|u\.?\s?s\.?\s?a|us|new\s+mexico)\b",
     re.IGNORECASE,
 )
 
