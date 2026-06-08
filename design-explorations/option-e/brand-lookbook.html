@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pathfinder — Five Brand Directions</title>
+<meta name="description" content="Five distinct brand systems for Pathfinder: Waypoint, True North, Signal, Atlas, and Lodestar. Logos, palettes, type, and a landing hero for each." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@500;600;700;800;900&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700;12..96,800&family=Familjen+Grotesk:wght@400;500;600;700&family=Fragment+Mono&family=Gloock&family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Outfit:wght@300;400;500;600;700&family=Public+Sans:wght@400;600;700;800&family=Sora:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============================================================
+     GALLERY CHROME — neutral charcoal presentation shell
+     so the five brand boards each pop on their own terms.
+     ============================================================ */
+  :root{
+    --g-bg:#131318; --g-bg2:#1A1A21; --g-ink:#ECEAF0; --g-mut:#8B8A95;
+    --g-line:rgba(255,255,255,.10); --g-line2:rgba(255,255,255,.18);
+    --g-body:'Familjen Grotesk',system-ui,sans-serif;
+    --g-mono:'Spline Sans Mono',ui-monospace,monospace;
+    --ease:cubic-bezier(.2,.7,.2,1);
+    --maxw:1180px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+  body{
+    background:var(--g-bg); color:var(--g-ink);
+    font-family:var(--g-body); font-size:16px; line-height:1.55;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
+    background:
+      radial-gradient(900px 600px at 85% -10%, rgba(120,110,160,.10), transparent 60%),
+      radial-gradient(800px 700px at -10% 30%, rgba(70,120,110,.08), transparent 60%);
+  }
+  .grain{position:fixed;inset:0;pointer-events:none;z-index:1;opacity:.045;mix-blend-mode:overlay}
+  .grain svg{width:100%;height:100%}
+  ::selection{background:#3a3a48;color:#fff}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px;position:relative;z-index:2}
+  .mono{font-family:var(--g-mono)}
+
+  /* --- top nav --- */
+  .gnav{position:sticky;top:0;z-index:40;backdrop-filter:blur(14px) saturate(1.3);
+    background:rgba(19,19,24,.72);border-bottom:1px solid var(--g-line)}
+  .gnav-in{display:flex;align-items:center;justify-content:space-between;height:62px}
+  .gnav-brand{display:flex;align-items:center;gap:11px;font-weight:600;letter-spacing:-.01em;font-size:15.5px}
+  .gnav-brand .gdot{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#E8552B,#E9C46A 55%,#4FE3A1);display:block}
+  .gnav-brand small{font-family:var(--g-mono);font-size:11px;color:var(--g-mut);letter-spacing:.04em;font-weight:400}
+  .gnav-links{display:flex;align-items:center;gap:4px}
+  .gnav-links a{font-family:var(--g-mono);font-size:12px;color:var(--g-mut);padding:7px 11px;border-radius:8px;
+    transition:color .2s var(--ease), background .2s var(--ease);letter-spacing:.02em;white-space:nowrap}
+  .gnav-links a:hover{color:var(--g-ink);background:var(--g-bg2)}
+  .gnav-links a b{color:var(--g-ink);font-weight:600}
+
+  /* --- intro --- */
+  .ghero{padding:84px 0 54px;position:relative}
+  .ghero .kick{font-family:var(--g-mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--g-mut)}
+  .ghero h1{font-family:var(--g-body);font-weight:700;font-size:clamp(38px,6.4vw,76px);line-height:1.02;
+    letter-spacing:-.035em;margin:22px 0 0;max-width:14ch}
+  .ghero h1 em{font-style:normal;background:linear-gradient(100deg,#E8552B,#E9C46A 40%,#4FE3A1 72%,#9aa6ff);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .ghero p{margin-top:24px;max-width:60ch;color:#bcbbc6;font-size:18px;line-height:1.6}
+  .ghero .meta{margin-top:30px;display:flex;gap:10px 26px;flex-wrap:wrap;font-family:var(--g-mono);
+    font-size:12.5px;color:var(--g-mut)}
+  .ghero .meta span{display:inline-flex;align-items:center;gap:8px}
+  .ghero .meta i{width:6px;height:6px;border-radius:50%;background:#4FE3A1;font-style:normal}
+
+  /* board index chips */
+  .idxrow{margin-top:42px;display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+  .idxchip{display:block;border:1px solid var(--g-line);border-radius:14px;padding:15px 16px;background:var(--g-bg2);
+    transition:transform .3s var(--ease), border-color .3s var(--ease), background .3s var(--ease)}
+  .idxchip:hover{transform:translateY(-4px);border-color:var(--g-line2);background:#20202a}
+  .idxchip .n{font-family:var(--g-mono);font-size:11px;color:var(--g-mut)}
+  .idxchip .nm{font-weight:600;font-size:16px;margin-top:9px;letter-spacing:-.01em}
+  .idxchip .sw{margin-top:13px;display:flex;gap:5px}
+  .idxchip .sw i{width:15px;height:15px;border-radius:5px;display:block}
+  .idxchip .ds{margin-top:11px;font-size:12px;color:var(--g-mut);line-height:1.4}
+
+  /* ============================================================
+     BOARD SCAFFOLD (shared)
+     ============================================================ */
+  .board{margin:48px auto;max-width:1240px;padding:0 28px;position:relative;z-index:2;scroll-margin-top:78px}
+  .board-frame{border-radius:26px;overflow:hidden;border:1px solid var(--g-line2);
+    box-shadow:0 2px 4px rgba(0,0,0,.3), 0 40px 90px -50px rgba(0,0,0,.9)}
+  .board-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin:0 6px 18px;flex-wrap:wrap}
+  .board-head .bh-l{display:flex;align-items:baseline;gap:16px}
+  .board-head .bh-n{font-family:var(--g-mono);font-size:13px;color:var(--g-mut)}
+  .board-head .bh-name{font-weight:700;font-size:22px;letter-spacing:-.02em}
+  .board-head .bh-tag{font-family:var(--g-mono);font-size:12px;color:var(--g-mut);letter-spacing:.04em;
+    text-transform:uppercase;text-align:right}
+
+  /* the branded hero mockup */
+  .stage{position:relative;overflow:hidden;padding:54px 56px 60px;min-height:560px;display:flex;align-items:center}
+  .stage-grid{position:relative;z-index:3;display:grid;grid-template-columns:1.06fr .94fr;gap:52px;
+    align-items:center;width:100%}
+  .stage-eyebrow{display:inline-flex;align-items:center;gap:9px;font-size:12px;letter-spacing:.14em;
+    text-transform:uppercase}
+  .stage-title{margin-top:22px;font-weight:700;line-height:1.02;letter-spacing:-.02em}
+  .stage-sub{margin-top:20px;max-width:46ch;line-height:1.55}
+  .stage-cta{margin-top:30px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .pill-input{display:flex;align-items:center;gap:10px;padding:12px 12px 12px 18px;flex:1;min-width:240px}
+  .pill-input input{flex:1;border:none;background:transparent;font:inherit;font-size:14px;min-width:0;outline:none}
+  .btn{border:none;cursor:pointer;font:inherit;font-weight:600;font-size:14px;display:inline-flex;
+    align-items:center;gap:8px;white-space:nowrap;transition:transform .25s var(--ease), filter .25s var(--ease), box-shadow .25s var(--ease)}
+  .btn:hover{transform:translateY(-2px)}
+  .btn:active{transform:translateY(0)}
+  .stage-meta{margin-top:18px;display:flex;gap:8px 20px;flex-wrap:wrap;font-size:12px}
+  .stage-meta span{display:inline-flex;align-items:center;gap:7px}
+
+  /* floating match card (shared structure) */
+  .mcard{position:relative;border-radius:16px;padding:20px 22px}
+  .mcard .mc-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .mc-chip{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:5px 10px;border-radius:999px;
+    display:inline-flex;align-items:center;gap:6px}
+  .mc-score{font-size:12px;font-weight:600}
+  .mcard h4{margin:15px 0 3px;font-size:19px;letter-spacing:-.01em;line-height:1.15}
+  .mcard .mc-co{font-size:12px}
+  .mcard .mc-why{margin-top:12px;font-size:13px;line-height:1.5}
+  .mc-bars{margin-top:15px;display:flex;flex-direction:column;gap:8px}
+  .mc-bar{display:flex;align-items:center;gap:10px;font-size:10.5px}
+  .mc-bar .lab{width:74px;text-transform:uppercase;letter-spacing:.05em}
+  .mc-bar .track{flex:1;height:6px;border-radius:999px;overflow:hidden}
+  .mc-bar .track i{display:block;height:100%;border-radius:999px}
+
+  /* brand system strip: logos | palette | type */
+  .system{display:grid;grid-template-columns:1.25fr .9fr 1.1fr;gap:0}
+  .sys-cell{padding:30px 30px;border-left:1px solid;min-width:0}
+  .sys-cell:first-child{border-left:none}
+  .sys-label{font-family:var(--g-mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
+    margin-bottom:20px;opacity:.6}
+  /* logos */
+  .lock{display:inline-flex;align-items:center;gap:.42em;line-height:1}
+  .lock svg{width:1.2em;height:1.2em;flex:none;display:block}
+  .lock .wm{letter-spacing:-.02em}
+  .logo-stack{display:flex;flex-direction:column;gap:14px}
+  .logo-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .logo-rev{border-radius:12px;padding:16px 18px;display:inline-flex}
+  .logo-mark{border-radius:12px;padding:12px;display:inline-flex;align-items:center;justify-content:center}
+  .logo-mark svg{width:34px;height:34px;display:block}
+  /* palette */
+  .swatches{display:flex;flex-direction:column;gap:9px}
+  .swatch{display:flex;align-items:center;gap:12px}
+  .swatch i{width:34px;height:34px;border-radius:9px;flex:none;border:1px solid rgba(0,0,0,.10)}
+  .swatch .sx{font-family:var(--g-mono);font-size:11.5px;line-height:1.3}
+  .swatch .sx b{display:block;font-weight:600;letter-spacing:.02em}
+  .swatch .sx span{opacity:.55}
+  /* type */
+  .type-aa{font-size:56px;line-height:.9;letter-spacing:-.02em}
+  .type-meta{margin-top:14px;display:flex;flex-direction:column;gap:9px}
+  .type-meta .tl{font-size:13px}
+  .type-meta .tl b{font-weight:600}
+  .type-meta .tl span{font-family:var(--g-mono);font-size:10.5px;opacity:.55;display:block;letter-spacing:.04em}
+  .type-sample{margin-top:16px;font-size:13.5px;line-height:1.5;opacity:.8}
+
+  /* ============================================================
+     BRAND 1 — WAYPOINT  (expedition / topographic)
+     ============================================================ */
+  .b1{--bg:#0F3429;--bg2:#F3EFE3;--ink:#11342A;--paper:#FBF8EF;--blaze:#D85B2C;--gold:#E0A53A;--sage:#7E9B85;
+      --line:rgba(17,52,42,.14);--mut:#5C7065;}
+  .b1 .stage{background:radial-gradient(120% 120% at 78% 12%, #15463A 0%, #0F3429 46%, #0B271F 100%);color:#EDE8D8}
+  .b1 .stage-eyebrow{color:#E9C98C;font-family:var(--g-mono)}
+  .b1 .stage-eyebrow i{width:7px;height:7px;border-radius:50%;background:var(--blaze);display:block}
+  .b1 .stage-title{font-family:'Bricolage Grotesque';font-size:clamp(32px,4.3vw,54px);color:#FBF8EF}
+  .b1 .stage-title em{font-style:normal;color:var(--gold)}
+  .b1 .stage-sub{color:#C9D3C6;font-family:var(--g-body)}
+  .b1 .pill-input{background:rgba(251,248,239,.07);border:1px solid rgba(233,201,140,.32);border-radius:999px}
+  .b1 .pill-input input{color:#EDE8D8}.b1 .pill-input input::placeholder{color:#9fb0a4}
+  .b1 .btn-primary{background:var(--blaze);color:#fff;border-radius:999px;padding:13px 22px;
+    box-shadow:0 12px 26px -12px rgba(216,91,44,.85)}
+  .b1 .btn-primary:hover{filter:brightness(1.06)}
+  .b1 .stage-meta{color:#9fb0a4;font-family:var(--g-mono)}
+  .b1 .stage-meta i{color:var(--gold);font-style:normal}
+  .b1 .mcard{background:var(--paper);box-shadow:0 30px 60px -28px rgba(0,0,0,.6);border:1px solid rgba(17,52,42,.08)}
+  .b1 .mc-chip{background:rgba(126,155,133,.2);color:#3E6A50}
+  .b1 .mc-score{color:var(--mut);font-family:var(--g-mono)}
+  .b1 .mcard h4{font-family:'Bricolage Grotesque';color:var(--ink)}
+  .b1 .mc-co{font-family:var(--g-mono);color:#8a9b8e}
+  .b1 .mc-why{color:#46584c}
+  .b1 .mc-bar{color:#6f8278;font-family:var(--g-mono)}.b1 .mc-bar .lab{color:#9aa99e}
+  .b1 .mc-bar .track{background:#E4DECC}.b1 .mc-bar .track i{background:var(--sage)}
+  .b1 .system{background:var(--bg2);color:var(--ink)}
+  .b1 .sys-cell{border-color:var(--line)}
+  .b1 .sys-label{color:var(--mut)}
+  .b1 .lock .wm{font-family:'Bricolage Grotesque';font-weight:700;color:var(--ink);font-size:30px}
+  .b1 .logo-rev{background:var(--bg)}.b1 .logo-rev .wm{color:var(--paper);font-size:24px}
+  .b1 .logo-mark{background:var(--bg)}
+  .b1 .swatch i.c1{background:#0F3429}.b1 .swatch i.c2{background:#FBF8EF}.b1 .swatch i.c3{background:#D85B2C}
+  .b1 .swatch i.c4{background:#E0A53A}.b1 .swatch i.c5{background:#7E9B85}
+  .b1 .type-aa{font-family:'Bricolage Grotesque';font-weight:700;color:var(--ink)}
+  .b1 .type-sample{font-family:var(--g-body)}
+
+  /* ============================================================
+     BRAND 2 — TRUE NORTH  (instrument / radar terminal)
+     ============================================================ */
+  .b2{--bg:#0A0F14;--panel:#0F1820;--ink:#0A0F14;--mint:#4FE3A1;--amber:#FFC24B;--slate:#9FB3C8;
+      --line:rgba(159,179,200,.16);}
+  .b2 .stage{background:
+      linear-gradient(180deg, rgba(79,227,161,.05), transparent 30%),
+      radial-gradient(80% 90% at 80% 50%, rgba(79,227,161,.10), transparent 60%),
+      #0A0F14;color:#DCE6EE;
+      background-image:
+        linear-gradient(rgba(159,179,200,.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(159,179,200,.05) 1px, transparent 1px),
+        radial-gradient(80% 90% at 80% 50%, rgba(79,227,161,.10), transparent 60%);
+      background-size:34px 34px, 34px 34px, 100% 100%}
+  .b2 .stage-eyebrow{color:var(--mint);font-family:'IBM Plex Mono';letter-spacing:.18em}
+  .b2 .stage-eyebrow i{width:8px;height:8px;border:1.5px solid var(--mint);border-radius:50%;display:block}
+  .b2 .stage-title{font-family:'Archivo';font-weight:800;font-size:clamp(30px,4vw,50px);color:#F2F7FB;
+    text-transform:uppercase;letter-spacing:-.01em;line-height:1.0}
+  .b2 .stage-title em{font-style:normal;color:var(--mint)}
+  .b2 .stage-sub{color:#9FB3C8;font-family:'IBM Plex Mono';font-size:14px;line-height:1.6}
+  .b2 .pill-input{background:#0F1820;border:1px solid var(--line);border-radius:8px}
+  .b2 .pill-input input{color:#DCE6EE;font-family:'IBM Plex Mono'}
+  .b2 .pill-input input::placeholder{color:#5f7488}
+  .b2 .btn-primary{background:var(--mint);color:#05231A;border-radius:8px;padding:13px 20px;font-family:'IBM Plex Mono';
+    font-weight:600;box-shadow:0 0 0 1px rgba(79,227,161,.4), 0 14px 30px -14px rgba(79,227,161,.6)}
+  .b2 .btn-primary:hover{filter:brightness(1.08)}
+  .b2 .stage-meta{color:#5f7488;font-family:'IBM Plex Mono'}
+  .b2 .stage-meta i{color:var(--mint);font-style:normal}
+  .b2 .mcard{background:#0F1820;border:1px solid var(--line);box-shadow:0 30px 60px -28px rgba(0,0,0,.8)}
+  .b2 .mc-chip{background:rgba(79,227,161,.14);color:var(--mint);font-family:'IBM Plex Mono';border:1px solid rgba(79,227,161,.25)}
+  .b2 .mc-score{color:var(--mint);font-family:'IBM Plex Mono'}
+  .b2 .mcard h4{font-family:'Archivo';font-weight:700;color:#F2F7FB;text-transform:uppercase;font-size:17px;letter-spacing:0}
+  .b2 .mc-co{font-family:'IBM Plex Mono';color:#7a8ea0}
+  .b2 .mc-why{color:#aebfcd;font-family:'IBM Plex Mono';font-size:12px}
+  .b2 .mc-bar{color:#9FB3C8;font-family:'IBM Plex Mono'}.b2 .mc-bar .lab{color:#5f7488}
+  .b2 .mc-bar .track{background:#1b2733}.b2 .mc-bar .track i{background:var(--mint)}
+  .b2 .system{background:#0C131A;color:#DCE6EE}
+  .b2 .sys-cell{border-color:var(--line)}
+  .b2 .sys-label{color:#5f7488}
+  .b2 .lock .wm{font-family:'Archivo';font-weight:800;color:#F2F7FB;font-size:27px;text-transform:uppercase;letter-spacing:-.01em}
+  .b2 .logo-rev{background:var(--mint)}.b2 .logo-rev .wm{color:#05231A;font-size:21px}
+  .b2 .logo-mark{background:#0F1820;border:1px solid var(--line)}
+  .b2 .swatch i.c1{background:#0A0F14}.b2 .swatch i.c2{background:#4FE3A1}.b2 .swatch i.c3{background:#FFC24B}
+  .b2 .swatch i.c4{background:#9FB3C8}.b2 .swatch i.c5{background:#0F1820}
+  .b2 .swatch .sx{color:#DCE6EE}
+  .b2 .type-aa{font-family:'Archivo';font-weight:800;color:#F2F7FB;text-transform:uppercase}
+  .b2 .type-sample{font-family:'IBM Plex Mono';color:#9FB3C8}
+  .b2 .type-meta .tl{color:#DCE6EE}
+
+  /* ============================================================
+     BRAND 3 — SIGNAL  (brutalist swiss poster)
+     ============================================================ */
+  .b3{--bg:#0B0B0B;--paper:#F4F3EC;--acid:#CDFB46;--ink:#0B0B0B;--line:rgba(11,11,11,.16);}
+  .b3 .stage{background:var(--paper);color:#0B0B0B;
+    background-image:linear-gradient(rgba(11,11,11,.05) 1px, transparent 1px);background-size:100% 30px}
+  .b3 .stage-eyebrow{color:#0B0B0B;font-family:'Spline Sans Mono';background:var(--acid);
+    padding:5px 10px;letter-spacing:.12em;font-weight:600}
+  .b3 .stage-title{font-family:'Anton';font-weight:400;font-size:clamp(44px,7.2vw,92px);color:#0B0B0B;
+    text-transform:uppercase;letter-spacing:-.01em;line-height:.92}
+  .b3 .stage-title em{font-style:normal;-webkit-text-stroke:2px #0B0B0B;-webkit-text-fill-color:var(--acid);color:var(--acid)}
+  .b3 .stage-sub{color:#2a2a2a;font-family:'Public Sans';font-weight:500;max-width:40ch}
+  .b3 .pill-input{background:#fff;border:2px solid #0B0B0B;border-radius:0}
+  .b3 .pill-input input{color:#0B0B0B;font-family:'Public Sans';font-weight:500}
+  .b3 .pill-input input::placeholder{color:#777}
+  .b3 .btn-primary{background:#0B0B0B;color:var(--acid);border-radius:0;padding:14px 22px;
+    font-family:'Public Sans';font-weight:800;text-transform:uppercase;letter-spacing:.02em}
+  .b3 .btn-primary:hover{background:var(--acid);color:#0B0B0B;box-shadow:5px 5px 0 #0B0B0B}
+  .b3 .stage-meta{color:#0B0B0B;font-family:'Spline Sans Mono';font-weight:500}
+  .b3 .stage-meta i{width:8px;height:8px;background:var(--acid);border:1px solid #0B0B0B;border-radius:0;font-style:normal;display:block}
+  .b3 .mcard{background:#fff;border:2px solid #0B0B0B;border-radius:0;box-shadow:8px 8px 0 #0B0B0B}
+  .b3 .mc-chip{background:var(--acid);color:#0B0B0B;border-radius:0;font-family:'Spline Sans Mono';font-weight:600;border:1px solid #0B0B0B}
+  .b3 .mc-score{color:#0B0B0B;font-family:'Spline Sans Mono'}
+  .b3 .mcard h4{font-family:'Anton';font-weight:400;color:#0B0B0B;text-transform:uppercase;font-size:23px;letter-spacing:0}
+  .b3 .mc-co{font-family:'Spline Sans Mono';color:#555}
+  .b3 .mc-why{color:#2a2a2a;font-family:'Public Sans';font-weight:500}
+  .b3 .mc-bar{color:#0B0B0B;font-family:'Spline Sans Mono'}.b3 .mc-bar .lab{color:#777}
+  .b3 .mc-bar .track{background:#e6e5dc;border:1px solid #0B0B0B;border-radius:0}.b3 .mc-bar .track i{background:#0B0B0B;border-radius:0}
+  .b3 .system{background:#0B0B0B;color:var(--paper)}
+  .b3 .sys-cell{border-color:rgba(244,243,236,.16)}
+  .b3 .sys-label{color:#8a8a82}
+  .b3 .lock .wm{font-family:'Anton';font-weight:400;color:var(--paper);font-size:34px;text-transform:uppercase;letter-spacing:.005em}
+  .b3 .logo-rev{background:var(--acid);border-radius:0}.b3 .logo-rev .wm{color:#0B0B0B;font-size:26px}
+  .b3 .logo-mark{background:var(--acid);border-radius:0}
+  .b3 .swatch i{border-radius:0;border-color:rgba(244,243,236,.2)}
+  .b3 .swatch i.c1{background:#0B0B0B}.b3 .swatch i.c2{background:#F4F3EC}.b3 .swatch i.c3{background:#CDFB46}
+  .b3 .swatch i.c4{background:#fff}.b3 .swatch i.c5{background:#777}
+  .b3 .swatch .sx{color:var(--paper)}
+  .b3 .type-aa{font-family:'Anton';font-weight:400;color:var(--paper);text-transform:uppercase}
+  .b3 .type-sample{font-family:'Public Sans';color:#cfcec6}
+  .b3 .type-meta .tl{color:var(--paper)}
+
+  /* ============================================================
+     BRAND 4 — ATLAS  (soft premium SaaS)
+     ============================================================ */
+  .b4{--bg:#0F1C1A;--paper:#F7FAF8;--ink:#16302B;--jade:#14A38B;--peach:#FFB59E;--mist:#E4EFEA;
+      --line:rgba(22,48,43,.10);--mut:#5b756d;}
+  .b4 .stage{background:
+      radial-gradient(70% 80% at 12% 18%, #EAF3EE 0%, transparent 55%),
+      radial-gradient(60% 70% at 88% 82%, #FBE9E2 0%, transparent 55%),
+      linear-gradient(160deg, #F7FAF8, #EFF5F1);color:#16302B}
+  .b4 .stage-eyebrow{color:var(--jade);font-family:var(--g-body);font-weight:600;letter-spacing:.06em}
+  .b4 .stage-eyebrow i{width:18px;height:8px;border-radius:999px;background:linear-gradient(90deg,var(--jade),var(--peach));display:block}
+  .b4 .stage-title{font-family:'Outfit';font-weight:600;font-size:clamp(32px,4.4vw,54px);color:#16302B;letter-spacing:-.025em}
+  .b4 .stage-title em{font-style:italic;font-family:'Newsreader';font-weight:500;color:var(--jade)}
+  .b4 .stage-sub{color:#3f5a52;font-family:'Manrope';font-weight:500}
+  .b4 .pill-input{background:#fff;border:1px solid var(--line);border-radius:999px;box-shadow:0 10px 30px -14px rgba(22,48,43,.25)}
+  .b4 .pill-input input{color:#16302B;font-family:'Manrope'}
+  .b4 .pill-input input::placeholder{color:#90a59d}
+  .b4 .btn-primary{background:linear-gradient(135deg,#16b89c,#0e8f79);color:#fff;border-radius:999px;padding:13px 22px;
+    font-family:'Manrope';font-weight:700;box-shadow:0 14px 30px -12px rgba(20,163,139,.6)}
+  .b4 .btn-primary:hover{filter:brightness(1.05)}
+  .b4 .stage-meta{color:#6c857c;font-family:'Manrope';font-weight:500}
+  .b4 .stage-meta i{color:var(--jade);font-style:normal}
+  .b4 .mcard{background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:0 30px 60px -30px rgba(22,48,43,.4)}
+  .b4 .mc-chip{background:rgba(20,163,139,.12);color:#0e8f79;font-family:'Manrope';font-weight:600}
+  .b4 .mc-score{color:var(--mut);font-family:'Manrope';font-weight:600}
+  .b4 .mcard h4{font-family:'Outfit';font-weight:600;color:#16302B}
+  .b4 .mc-co{font-family:'Manrope';color:#90a59d;font-weight:500}
+  .b4 .mc-why{color:#3f5a52;font-family:'Manrope'}
+  .b4 .mc-bar{color:#6c857c;font-family:'Manrope'}.b4 .mc-bar .lab{color:#a3b5ad}
+  .b4 .mc-bar .track{background:#E4EFEA}.b4 .mc-bar .track i{background:linear-gradient(90deg,var(--jade),#3fcaae)}
+  .b4 .system{background:var(--paper);color:#16302B}
+  .b4 .sys-cell{border-color:var(--line)}
+  .b4 .sys-label{color:var(--mut)}
+  .b4 .lock .wm{font-family:'Outfit';font-weight:600;color:#16302B;font-size:29px}
+  .b4 .logo-rev{background:#16302B}.b4 .logo-rev .wm{color:#F7FAF8;font-size:23px}
+  .b4 .logo-mark{background:var(--mist)}
+  .b4 .swatch i.c1{background:#14A38B}.b4 .swatch i.c2{background:#FFB59E}.b4 .swatch i.c3{background:#16302B}
+  .b4 .swatch i.c4{background:#F7FAF8}.b4 .swatch i.c5{background:#E4EFEA}
+  .b4 .type-aa{font-family:'Outfit';font-weight:600;color:#16302B}
+  .b4 .type-sample{font-family:'Manrope'}
+
+  /* ============================================================
+     BRAND 5 — LODESTAR  (celestial navigation)
+     ============================================================ */
+  .b5{--bg:#0B1026;--paper:#EDEBF2;--ink:#0B1026;--gold:#E9C46A;--star:#F4D58D;--lilac:#B9C0E8;
+      --line:rgba(185,192,232,.16);}
+  .b5 .stage{background:
+      radial-gradient(90% 120% at 78% 18%, #1A2350 0%, #0E1430 45%, #080B1E 100%);color:#EDEBF2}
+  .b5 .stage-eyebrow{color:var(--gold);font-family:'Fragment Mono';letter-spacing:.16em}
+  .b5 .stage-eyebrow i{width:9px;height:9px;display:block;
+    background:radial-gradient(circle,var(--star),transparent 70%)}
+  .b5 .stage-title{font-family:'Gloock';font-weight:400;font-size:clamp(32px,4.6vw,58px);color:#F5F3FA;letter-spacing:-.01em;line-height:1.04}
+  .b5 .stage-title em{font-style:normal;color:var(--gold)}
+  .b5 .stage-sub{color:#B9C0E8;font-family:'Sora';font-weight:400}
+  .b5 .pill-input{background:rgba(185,192,232,.06);border:1px solid rgba(233,196,106,.30);border-radius:999px}
+  .b5 .pill-input input{color:#EDEBF2;font-family:'Sora'}
+  .b5 .pill-input input::placeholder{color:#7b85b5}
+  .b5 .btn-primary{background:linear-gradient(135deg,var(--gold),#caa14a);color:#0B1026;border-radius:999px;padding:13px 22px;
+    font-family:'Sora';font-weight:600;box-shadow:0 14px 32px -14px rgba(233,196,106,.7)}
+  .b5 .btn-primary:hover{filter:brightness(1.07)}
+  .b5 .stage-meta{color:#7b85b5;font-family:'Fragment Mono'}
+  .b5 .stage-meta i{color:var(--gold);font-style:normal}
+  .b5 .mcard{background:#121A3A;border:1px solid rgba(185,192,232,.16);box-shadow:0 30px 60px -28px rgba(0,0,0,.8)}
+  .b5 .mc-chip{background:rgba(233,196,106,.14);color:var(--gold);font-family:'Fragment Mono'}
+  .b5 .mc-score{color:var(--gold);font-family:'Fragment Mono'}
+  .b5 .mcard h4{font-family:'Gloock';font-weight:400;color:#F5F3FA}
+  .b5 .mc-co{font-family:'Fragment Mono';color:#8a93c2}
+  .b5 .mc-why{color:#C4CAEC;font-family:'Sora'}
+  .b5 .mc-bar{color:#B9C0E8;font-family:'Fragment Mono'}.b5 .mc-bar .lab{color:#7b85b5}
+  .b5 .mc-bar .track{background:#1d2750}.b5 .mc-bar .track i{background:linear-gradient(90deg,var(--gold),var(--star))}
+  .b5 .system{background:#0D1330;color:#EDEBF2}
+  .b5 .sys-cell{border-color:var(--line)}
+  .b5 .sys-label{color:#7b85b5}
+  .b5 .lock .wm{font-family:'Gloock';font-weight:400;color:#F5F3FA;font-size:30px}
+  .b5 .logo-rev{background:var(--gold)}.b5 .logo-rev .wm{color:#0B1026;font-size:24px}
+  .b5 .logo-mark{background:#121A3A;border:1px solid rgba(185,192,232,.16)}
+  .b5 .swatch i.c1{background:#0B1026}.b5 .swatch i.c2{background:#E9C46A}.b5 .swatch i.c3{background:#B9C0E8}
+  .b5 .swatch i.c4{background:#F5F3FA}.b5 .swatch i.c5{background:#121A3A}
+  .b5 .swatch .sx{color:#EDEBF2}
+  .b5 .type-aa{font-family:'Gloock';font-weight:400;color:#F5F3FA}
+  .b5 .type-sample{font-family:'Sora';color:#B9C0E8}
+  .b5 .type-meta .tl{color:#EDEBF2}
+
+  /* art layers */
+  .art{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
+  .art svg{position:absolute;display:block}
+  .twinkle{animation:tw 3.6s var(--ease) infinite}
+  @keyframes tw{0%,100%{opacity:.4}50%{opacity:1}}
+  .sweep{transform-origin:center;animation:sweep 5s linear infinite}
+  @keyframes sweep{to{transform:rotate(360deg)}}
+  .floaty{animation:floaty 6s ease-in-out infinite}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+
+  /* footer */
+  .gfoot{padding:64px 0 70px;border-top:1px solid var(--g-line);margin-top:40px;position:relative;z-index:2}
+  .gfoot .gf-in{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:center}
+  .gfoot p{color:var(--g-mut);font-size:14px;max-width:52ch}
+  .gfoot .gf-mono{font-family:var(--g-mono);font-size:12px;color:var(--g-mut)}
+
+  /* reveal */
+  .rv{opacity:0;transform:translateY(20px);transition:opacity .7s var(--ease), transform .7s var(--ease)}
+  .rv.in{opacity:1;transform:none}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.rv{opacity:1;transform:none}}
+
+  /* responsive */
+  @media(max-width:1020px){
+    .stage-grid{grid-template-columns:1fr;gap:36px}
+    .stage{min-height:0;padding:42px 36px 46px}
+    .visual-col{order:2}
+    .system{grid-template-columns:1fr}
+    .sys-cell{border-left:none;border-top:1px solid}
+    .b1 .sys-cell,.b2 .sys-cell,.b3 .sys-cell,.b4 .sys-cell,.b5 .sys-cell{border-top-color:inherit}
+    .idxrow{grid-template-columns:1fr 1fr}
+  }
+  @media(max-width:620px){
+    .wrap{padding:0 18px}.board{padding:0 16px}
+    .stage{padding:32px 22px 36px}
+    .gnav-links{display:none}
+    .idxrow{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="grain" aria-hidden="true">
+  <svg xmlns="http://www.w3.org/2000/svg"><filter id="gn"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#gn)"/></svg>
+</div>
+
+<!-- ===== GALLERY NAV ===== -->
+<header class="gnav">
+  <div class="wrap gnav-in">
+    <a href="#top" class="gnav-brand"><span class="gdot"></span> Pathfinder <small>/ brand exploration</small></a>
+    <nav class="gnav-links">
+      <a href="#waypoint"><b>01</b> Waypoint</a>
+      <a href="#truenorth"><b>02</b> True North</a>
+      <a href="#signal"><b>03</b> Signal</a>
+      <a href="#atlas"><b>04</b> Atlas</a>
+      <a href="#lodestar"><b>05</b> Lodestar</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ===== INTRO ===== -->
+<section class="ghero" id="top">
+  <div class="wrap">
+    <div class="kick rv in">Option A · Five directions · One name</div>
+    <h1 class="rv in">Five ways to brand <em>Pathfinder</em>.</h1>
+    <p class="rv in">Every direction keeps the name <strong>Pathfinder</strong> and the product — a curated shortlist of fifteen internships, each with the reasoning behind it. What changes is the world it lives in: the logo, the palette, the type, and the feel of the landing page. Pick the one that sounds like you.</p>
+    <div class="meta rv in">
+      <span><i></i> Logo + reversed + mark for each</span>
+      <span><i></i> Full color &amp; type system</span>
+      <span><i></i> A real landing hero per brand</span>
+    </div>
+    <div class="idxrow rv in">
+      <a class="idxchip" href="#waypoint"><div class="n">01 / EXPEDITION</div><div class="nm">Waypoint</div><div class="sw"><i style="background:#0F3429"></i><i style="background:#FBF8EF"></i><i style="background:#D85B2C"></i><i style="background:#E0A53A"></i></div><div class="ds">Topographic, outdoorsy, route-finding.</div></a>
+      <a class="idxchip" href="#truenorth"><div class="n">02 / INSTRUMENT</div><div class="nm">True North</div><div class="sw"><i style="background:#0A0F14"></i><i style="background:#4FE3A1"></i><i style="background:#FFC24B"></i><i style="background:#9FB3C8"></i></div><div class="ds">Radar terminal, precise, data-driven.</div></a>
+      <a class="idxchip" href="#signal"><div class="n">03 / BRUTALIST</div><div class="nm">Signal</div><div class="sw"><i style="background:#0B0B0B"></i><i style="background:#F4F3EC"></i><i style="background:#CDFB46"></i><i style="background:#777"></i></div><div class="ds">Loud Swiss poster, cut the noise.</div></a>
+      <a class="idxchip" href="#atlas"><div class="n">04 / SOFT SAAS</div><div class="nm">Atlas</div><div class="sw"><i style="background:#14A38B"></i><i style="background:#FFB59E"></i><i style="background:#16302B"></i><i style="background:#E4EFEA"></i></div><div class="ds">Calm, friendly, premium &amp; rounded.</div></a>
+      <a class="idxchip" href="#lodestar"><div class="n">05 / CELESTIAL</div><div class="nm">Lodestar</div><div class="sw"><i style="background:#0B1026"></i><i style="background:#E9C46A"></i><i style="background:#B9C0E8"></i><i style="background:#F5F3FA"></i></div><div class="ds">North-star, constellation, elegant dark.</div></a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     BOARD 01 — WAYPOINT
+     ============================================================ -->
+<section class="board b1" id="waypoint">
+  <div class="board-head rv">
+    <div class="bh-l"><span class="bh-n">01</span><span class="bh-name">Waypoint</span></div>
+    <div class="bh-tag">Expedition · Topographic · Route-finding</div>
+  </div>
+  <div class="board-frame rv">
+    <!-- hero -->
+    <div class="stage">
+      <div class="art" aria-hidden="true">
+        <svg width="760" height="760" viewBox="0 0 760 760" style="right:-120px;top:-90px;opacity:.5">
+          <g fill="none" stroke="#E9C98C" stroke-width="1.4" opacity=".5">
+            <path d="M380 120C520 130 640 230 640 380S520 630 380 640 120 530 120 380 240 110 380 120Z"/>
+            <path d="M380 180C490 188 580 270 580 380S490 572 380 580 180 490 180 380 270 172 380 180Z" opacity=".8"/>
+            <path d="M380 240C460 246 520 310 520 380S460 514 380 520 240 460 240 380 300 234 380 240Z"/>
+            <path d="M380 300C430 304 460 340 460 380S430 456 380 460 300 430 300 380 330 296 380 300Z" opacity=".8"/>
+          </g>
+          <path d="M380 340l16 40h-32z" fill="#D85B2C"/>
+          <circle cx="380" cy="380" r="5" fill="#D85B2C"/>
+        </svg>
+      </div>
+      <div class="stage-grid">
+        <div>
+          <span class="stage-eyebrow"><i></i> Chart your route · CS · CompE · EE</span>
+          <h1 class="stage-title">Find the trail to the fifteen roles <em>worth your time</em>.</h1>
+          <p class="stage-sub">Stop wandering the job boards. Drop your profile and Pathfinder maps a curated shortlist across local, big tech, startup, and reach — each marked with the reasoning that put it there.</p>
+          <div class="stage-cta">
+            <form class="pill-input" onsubmit="return false"><input placeholder="Paste your LinkedIn URL or resume" aria-label="profile"></form>
+            <button class="btn btn-primary">Map my matches →</button>
+          </div>
+          <div class="stage-meta"><span><i>✓</i> No account to start</span><span><i>✓</i> Reasons on every match</span><span><i>✓</i> Under a minute</span></div>
+        </div>
+        <div class="visual-col">
+          <div class="mcard floaty">
+            <div class="mc-top"><span class="mc-chip">Strong match</span><span class="mc-score">0.91</span></div>
+            <h4>Embedded Systems Intern</h4>
+            <div class="mc-co">Anduril Industries · Costa Mesa, CA</div>
+            <p class="mc-why">Your RTOS coursework and drone-firmware project line up with their flight stack.</p>
+            <div class="mc-bars">
+              <div class="mc-bar"><span class="lab">Skills</span><span class="track"><i style="width:88%"></i></span><span>88</span></div>
+              <div class="mc-bar"><span class="lab">Coursework</span><span class="track"><i style="width:79%"></i></span><span>79</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- system -->
+    <div class="system">
+      <div class="sys-cell">
+        <div class="sys-label">Logo</div>
+        <div class="logo-stack">
+          <span class="lock"><svg viewBox="0 0 64 64"><g fill="none" stroke="#11342A" stroke-width="3.2"><circle cx="32" cy="32" r="25"/><circle cx="32" cy="32" r="15"/></g><path d="M32 25l7 16H25z" fill="#D85B2C"/></svg><span class="wm">Pathfinder</span></span>
+          <div class="logo-row">
+            <span class="lock logo-rev"><svg viewBox="0 0 64 64"><g fill="none" stroke="#FBF8EF" stroke-width="3.2"><circle cx="32" cy="32" r="25"/><circle cx="32" cy="32" r="15"/></g><path d="M32 25l7 16H25z" fill="#D85B2C"/></svg><span class="wm">Pathfinder</span></span>
+            <span class="logo-mark"><svg viewBox="0 0 64 64"><g fill="none" stroke="#FBF8EF" stroke-width="3.4"><circle cx="32" cy="32" r="24"/><circle cx="32" cy="32" r="14"/></g><path d="M32 26l6 14H26z" fill="#D85B2C"/></svg></span>
+          </div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Palette</div>
+        <div class="swatches">
+          <div class="swatch"><i class="c1"></i><span class="sx"><b>Pine</b><span>#0F3429</span></span></div>
+          <div class="swatch"><i class="c2"></i><span class="sx"><b>Bone</b><span>#FBF8EF</span></span></div>
+          <div class="swatch"><i class="c3"></i><span class="sx"><b>Trail Blaze</b><span>#D85B2C</span></span></div>
+          <div class="swatch"><i class="c4"></i><span class="sx"><b>Map Gold</b><span>#E0A53A</span></span></div>
+          <div class="swatch"><i class="c5"></i><span class="sx"><b>Sage</b><span>#7E9B85</span></span></div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Typography</div>
+        <div class="type-aa">Aa</div>
+        <div class="type-meta">
+          <div class="tl"><b>Bricolage Grotesque</b><span>Display / headings</span></div>
+          <div class="tl" style="font-family:'Familjen Grotesk'"><b>Familjen Grotesk</b><span style="font-family:var(--g-mono)">Body / UI</span></div>
+        </div>
+        <p class="type-sample">Honest routes for underclassmen done firing applications into the void.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     BOARD 02 — TRUE NORTH
+     ============================================================ -->
+<section class="board b2" id="truenorth">
+  <div class="board-head rv">
+    <div class="bh-l"><span class="bh-n">02</span><span class="bh-name">True North</span></div>
+    <div class="bh-tag">Instrument · Radar · Precision</div>
+  </div>
+  <div class="board-frame rv">
+    <div class="stage">
+      <div class="art" aria-hidden="true">
+        <svg width="520" height="520" viewBox="0 0 520 520" style="right:-40px;top:50%;transform:translateY(-50%);opacity:.9">
+          <g fill="none" stroke="#4FE3A1" stroke-width="1" opacity=".35">
+            <circle cx="260" cy="260" r="60"/><circle cx="260" cy="260" r="120"/><circle cx="260" cy="260" r="180"/><circle cx="260" cy="260" r="240"/>
+            <line x1="260" y1="20" x2="260" y2="500"/><line x1="20" y1="260" x2="500" y2="260"/>
+          </g>
+          <g class="sweep" style="transform-origin:260px 260px"><path d="M260 260 L260 30 A230 230 0 0 1 420 110 Z" fill="url(#rg)"/></g>
+          <defs><radialGradient id="rg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(260 260) scale(230)"><stop offset="0" stop-color="#4FE3A1" stop-opacity=".4"/><stop offset="1" stop-color="#4FE3A1" stop-opacity="0"/></radialGradient></defs>
+          <circle cx="345" cy="180" r="4" fill="#4FE3A1" class="twinkle"/><circle cx="180" cy="330" r="3" fill="#FFC24B" class="twinkle" style="animation-delay:.8s"/><circle cx="350" cy="350" r="3" fill="#4FE3A1" class="twinkle" style="animation-delay:1.6s"/>
+        </svg>
+      </div>
+      <div class="stage-grid">
+        <div>
+          <span class="stage-eyebrow"><i></i> Precision job-fit · v1.0</span>
+          <h1 class="stage-title">Stop spraying. <em>Lock onto</em> the fifteen that fit.</h1>
+          <p class="stage-sub">// Pathfinder reads your profile like an instrument — coursework, projects, skills — and triangulates the roles where the signal is real. Four buckets. Every match scored and explained.</p>
+          <div class="stage-cta">
+            <form class="pill-input" onsubmit="return false"><input placeholder="> paste linkedin url or resume" aria-label="profile"></form>
+            <button class="btn btn-primary">RUN_SCAN ▸</button>
+          </div>
+          <div class="stage-meta"><span><i>●</i> 2,140 scanned</span><span><i>●</i> 15 locked</span><span><i>●</i> 0 spray</span></div>
+        </div>
+        <div class="visual-col">
+          <div class="mcard floaty">
+            <div class="mc-top"><span class="mc-chip">● Locked</span><span class="mc-score">0.91</span></div>
+            <h4>Embedded Systems Intern</h4>
+            <div class="mc-co">ANDURIL · COSTA MESA, CA</div>
+            <p class="mc-why">RTOS coursework + drone-firmware project ≈ flight stack. High confidence.</p>
+            <div class="mc-bars">
+              <div class="mc-bar"><span class="lab">skills</span><span class="track"><i style="width:88%"></i></span><span>88</span></div>
+              <div class="mc-bar"><span class="lab">course</span><span class="track"><i style="width:79%"></i></span><span>79</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="system">
+      <div class="sys-cell">
+        <div class="sys-label">Logo</div>
+        <div class="logo-stack">
+          <span class="lock"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="22" fill="none" stroke="#4FE3A1" stroke-width="2.6"/><g stroke="#4FE3A1" stroke-width="2.6"><line x1="32" y1="6" x2="32" y2="15"/><line x1="32" y1="49" x2="32" y2="58"/><line x1="6" y1="32" x2="15" y2="32"/><line x1="49" y1="32" x2="58" y2="32"/></g><path d="M32 22l8 10-8 10-8-10z" fill="#4FE3A1"/></svg><span class="wm">Pathfinder</span></span>
+          <div class="logo-row">
+            <span class="lock logo-rev"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="22" fill="none" stroke="#05231A" stroke-width="2.6"/><g stroke="#05231A" stroke-width="2.6"><line x1="32" y1="6" x2="32" y2="15"/><line x1="32" y1="49" x2="32" y2="58"/><line x1="6" y1="32" x2="15" y2="32"/><line x1="49" y1="32" x2="58" y2="32"/></g><path d="M32 22l8 10-8 10-8-10z" fill="#05231A"/></svg><span class="wm">Pathfinder</span></span>
+            <span class="logo-mark"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="22" fill="none" stroke="#4FE3A1" stroke-width="2.8"/><g stroke="#4FE3A1" stroke-width="2.8"><line x1="32" y1="7" x2="32" y2="15"/><line x1="32" y1="49" x2="32" y2="57"/><line x1="7" y1="32" x2="15" y2="32"/><line x1="49" y1="32" x2="57" y2="32"/></g><path d="M32 23l8 9-8 9-8-9z" fill="#4FE3A1"/></svg></span>
+          </div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Palette</div>
+        <div class="swatches">
+          <div class="swatch"><i class="c1"></i><span class="sx"><b>Void</b><span>#0A0F14</span></span></div>
+          <div class="swatch"><i class="c2"></i><span class="sx"><b>Phosphor</b><span>#4FE3A1</span></span></div>
+          <div class="swatch"><i class="c3"></i><span class="sx"><b>Amber Blip</b><span>#FFC24B</span></span></div>
+          <div class="swatch"><i class="c4"></i><span class="sx"><b>Slate</b><span>#9FB3C8</span></span></div>
+          <div class="swatch"><i class="c5"></i><span class="sx"><b>Panel</b><span>#0F1820</span></span></div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Typography</div>
+        <div class="type-aa">Aa</div>
+        <div class="type-meta">
+          <div class="tl"><b>Archivo</b> <span>Display / headings (800)</span></div>
+          <div class="tl" style="font-family:'IBM Plex Mono'"><b>IBM Plex Mono</b><span style="font-family:var(--g-mono)">Body / data / UI</span></div>
+        </div>
+        <p class="type-sample">A reach is a reach. We flag the long shots and back the read.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     BOARD 03 — SIGNAL
+     ============================================================ -->
+<section class="board b3" id="signal">
+  <div class="board-head rv">
+    <div class="bh-l"><span class="bh-n">03</span><span class="bh-name">Signal</span></div>
+    <div class="bh-tag">Brutalist · Swiss · Cut the noise</div>
+  </div>
+  <div class="board-frame rv">
+    <div class="stage">
+      <div class="art" aria-hidden="true">
+        <svg width="440" height="440" viewBox="0 0 440 440" style="right:30px;bottom:-40px;opacity:1">
+          <g fill="none" stroke="#0B0B0B" stroke-width="10" stroke-linecap="square">
+            <path d="M110 330a160 160 0 0 1 220 0" opacity=".18"/>
+            <path d="M140 320a120 120 0 0 1 160 0" opacity=".4"/>
+            <path d="M170 310a78 78 0 0 1 100 0" opacity=".7"/>
+          </g>
+          <rect x="206" y="296" width="28" height="28" fill="#CDFB46" stroke="#0B0B0B" stroke-width="4"/>
+        </svg>
+      </div>
+      <div class="stage-grid">
+        <div>
+          <span class="stage-eyebrow">CUT THE NOISE</span>
+          <h1 class="stage-title">FIFTEEN<br>ROLES.<br><em>ZERO SPRAY.</em></h1>
+          <p class="stage-sub">Pathfinder kills the 400-application grind. Paste your profile, get a shortlist that fits — local, big tech, startup, reach — every pick with the receipts.</p>
+          <div class="stage-cta">
+            <form class="pill-input" onsubmit="return false"><input placeholder="LINKEDIN URL OR RESUME" aria-label="profile"></form>
+            <button class="btn btn-primary">SEE MATCHES</button>
+          </div>
+          <div class="stage-meta"><span><i></i> NO ACCOUNT</span><span><i></i> REASONS GIVEN</span><span><i></i> &lt; 60S</span></div>
+        </div>
+        <div class="visual-col">
+          <div class="mcard floaty">
+            <div class="mc-top"><span class="mc-chip">STRONG</span><span class="mc-score">0.91</span></div>
+            <h4>Embedded Systems Intern</h4>
+            <div class="mc-co">ANDURIL · COSTA MESA</div>
+            <p class="mc-why">RTOS coursework + drone firmware = their flight stack. No fluff.</p>
+            <div class="mc-bars">
+              <div class="mc-bar"><span class="lab">SKILLS</span><span class="track"><i style="width:88%"></i></span><span>88</span></div>
+              <div class="mc-bar"><span class="lab">COURSE</span><span class="track"><i style="width:79%"></i></span><span>79</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="system">
+      <div class="sys-cell">
+        <div class="sys-label">Logo</div>
+        <div class="logo-stack">
+          <span class="lock"><svg viewBox="0 0 64 64"><g fill="none" stroke="#F4F3EC" stroke-width="5" stroke-linecap="square"><path d="M16 44a26 26 0 0 1 32 0" opacity=".4"/><path d="M22 40a17 17 0 0 1 20 0" opacity=".7"/></g><rect x="28" y="36" width="8" height="8" fill="#CDFB46"/></svg><span class="wm">Pathfinder</span></span>
+          <div class="logo-row">
+            <span class="lock logo-rev"><svg viewBox="0 0 64 64"><g fill="none" stroke="#0B0B0B" stroke-width="5" stroke-linecap="square"><path d="M16 44a26 26 0 0 1 32 0" opacity=".4"/><path d="M22 40a17 17 0 0 1 20 0" opacity=".75"/></g><rect x="28" y="36" width="8" height="8" fill="#0B0B0B"/></svg><span class="wm">Pathfinder</span></span>
+            <span class="logo-mark"><svg viewBox="0 0 64 64"><g fill="none" stroke="#0B0B0B" stroke-width="5.4" stroke-linecap="square"><path d="M15 45a27 27 0 0 1 34 0" opacity=".45"/><path d="M21 41a18 18 0 0 1 22 0" opacity=".8"/></g><rect x="27" y="36" width="10" height="10" fill="#0B0B0B"/></svg></span>
+          </div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Palette</div>
+        <div class="swatches">
+          <div class="swatch"><i class="c1"></i><span class="sx"><b>Ink</b><span>#0B0B0B</span></span></div>
+          <div class="swatch"><i class="c2"></i><span class="sx"><b>Newsprint</b><span>#F4F3EC</span></span></div>
+          <div class="swatch"><i class="c3"></i><span class="sx"><b>Acid</b><span>#CDFB46</span></span></div>
+          <div class="swatch"><i class="c4"></i><span class="sx"><b>White</b><span>#FFFFFF</span></span></div>
+          <div class="swatch"><i class="c5"></i><span class="sx"><b>Concrete</b><span>#777777</span></span></div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Typography</div>
+        <div class="type-aa">Aa</div>
+        <div class="type-meta">
+          <div class="tl"><b>Anton</b> <span>Display / massive headlines</span></div>
+          <div class="tl" style="font-family:'Public Sans'"><b>Public Sans</b><span style="font-family:var(--g-mono)">Body · Spline Mono for labels</span></div>
+        </div>
+        <p class="type-sample">No black box. No mystery score. The receipts on every role.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     BOARD 04 — ATLAS
+     ============================================================ -->
+<section class="board b4" id="atlas">
+  <div class="board-head rv">
+    <div class="bh-l"><span class="bh-n">04</span><span class="bh-name">Atlas</span></div>
+    <div class="bh-tag">Soft SaaS · Friendly · Premium</div>
+  </div>
+  <div class="board-frame rv">
+    <div class="stage">
+      <div class="art" aria-hidden="true">
+        <svg width="560" height="520" viewBox="0 0 560 520" style="right:-40px;top:40px;opacity:.85">
+          <circle cx="360" cy="180" r="120" fill="#14A38B" opacity=".10"/>
+          <circle cx="430" cy="300" r="90" fill="#FFB59E" opacity=".18"/>
+          <path d="M120 360 C220 300 300 380 400 300 S520 220 540 180" fill="none" stroke="#14A38B" stroke-width="2" stroke-dasharray="2 9" stroke-linecap="round" opacity=".5"/>
+          <circle cx="120" cy="360" r="7" fill="#14A38B"/><circle cx="400" cy="300" r="7" fill="#14A38B"/><circle cx="540" cy="180" r="9" fill="#FFB59E" stroke="#fff" stroke-width="3"/>
+        </svg>
+      </div>
+      <div class="stage-grid">
+        <div>
+          <span class="stage-eyebrow"><i></i> Your friendly career guide</span>
+          <h1 class="stage-title">Fifteen roles, <em>picked with care</em>.</h1>
+          <p class="stage-sub">Pathfinder reads your profile the way a sharp friend would, then hands you a calm, curated shortlist across local, big tech, startup, and reach — each one with a plain-language reason it made the list.</p>
+          <div class="stage-cta">
+            <form class="pill-input" onsubmit="return false"><input placeholder="Paste your LinkedIn URL or resume" aria-label="profile"></form>
+            <button class="btn btn-primary">See your matches</button>
+          </div>
+          <div class="stage-meta"><span><i>✓</i> Free to start</span><span><i>✓</i> A reason on each</span><span><i>✓</i> About a minute</span></div>
+        </div>
+        <div class="visual-col">
+          <div class="mcard floaty">
+            <div class="mc-top"><span class="mc-chip">Strong match</span><span class="mc-score">0.91</span></div>
+            <h4>Embedded Systems Intern</h4>
+            <div class="mc-co">Anduril Industries · Costa Mesa, CA</div>
+            <p class="mc-why">Your RTOS coursework and drone-firmware project map neatly onto their flight stack.</p>
+            <div class="mc-bars">
+              <div class="mc-bar"><span class="lab">Skills</span><span class="track"><i style="width:88%"></i></span><span>88</span></div>
+              <div class="mc-bar"><span class="lab">Coursework</span><span class="track"><i style="width:79%"></i></span><span>79</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="system">
+      <div class="sys-cell">
+        <div class="sys-label">Logo</div>
+        <div class="logo-stack">
+          <span class="lock"><svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="18" fill="url(#a4)"/><circle cx="26" cy="32" r="12" fill="none" stroke="#fff" stroke-width="3.4"/><circle cx="40" cy="32" r="12" fill="none" stroke="#fff" stroke-width="3.4" opacity=".75"/><defs><linearGradient id="a4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#16b89c"/><stop offset="1" stop-color="#0e8f79"/></linearGradient></defs></svg><span class="wm">Pathfinder</span></span>
+          <div class="logo-row">
+            <span class="lock logo-rev"><svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="18" fill="#F7FAF8"/><circle cx="26" cy="32" r="12" fill="none" stroke="#16302B" stroke-width="3.4"/><circle cx="40" cy="32" r="12" fill="none" stroke="#16302B" stroke-width="3.4" opacity=".7"/></svg><span class="wm">Pathfinder</span></span>
+            <span class="logo-mark"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="19" fill="url(#a4b)"/><circle cx="26" cy="32" r="12" fill="none" stroke="#fff" stroke-width="3.6"/><circle cx="40" cy="32" r="12" fill="none" stroke="#fff" stroke-width="3.6" opacity=".75"/><defs><linearGradient id="a4b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#16b89c"/><stop offset="1" stop-color="#0e8f79"/></linearGradient></defs></svg></span>
+          </div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Palette</div>
+        <div class="swatches">
+          <div class="swatch"><i class="c1"></i><span class="sx"><b>Jade</b><span>#14A38B</span></span></div>
+          <div class="swatch"><i class="c2"></i><span class="sx"><b>Peach</b><span>#FFB59E</span></span></div>
+          <div class="swatch"><i class="c3"></i><span class="sx"><b>Deep Pine</b><span>#16302B</span></span></div>
+          <div class="swatch"><i class="c4"></i><span class="sx"><b>Cloud</b><span>#F7FAF8</span></span></div>
+          <div class="swatch"><i class="c5"></i><span class="sx"><b>Mist</b><span>#E4EFEA</span></span></div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Typography</div>
+        <div class="type-aa">Aa</div>
+        <div class="type-meta">
+          <div class="tl"><b>Outfit</b> <span>Display / headings</span></div>
+          <div class="tl" style="font-family:'Manrope'"><b>Manrope</b> <span style="font-family:var(--g-mono)">Body · Newsreader italic accents</span></div>
+        </div>
+        <p class="type-sample">A curated shortlist, <span style="font-family:'Newsreader';font-style:italic">picked with care</span>, not another firehose.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     BOARD 05 — LODESTAR
+     ============================================================ -->
+<section class="board b5" id="lodestar">
+  <div class="board-head rv">
+    <div class="bh-l"><span class="bh-n">05</span><span class="bh-name">Lodestar</span></div>
+    <div class="bh-tag">Celestial · North-star · Elegant dark</div>
+  </div>
+  <div class="board-frame rv">
+    <div class="stage">
+      <div class="art" aria-hidden="true">
+        <svg width="600" height="560" viewBox="0 0 600 560" style="right:-30px;top:0;opacity:.95">
+          <g stroke="#E9C46A" stroke-width="1" opacity=".5" fill="none">
+            <polyline points="120,420 230,300 360,340 470,180"/>
+          </g>
+          <g fill="#B9C0E8"><circle cx="120" cy="420" r="2.5" class="twinkle"/><circle cx="230" cy="300" r="2" class="twinkle" style="animation-delay:.6s"/><circle cx="360" cy="340" r="2.5" class="twinkle" style="animation-delay:1.1s"/></g>
+          <g class="twinkle" style="animation-delay:.3s"><path d="M470 120l9 48 48 9-48 9-9 48-9-48-48-9 48-9z" fill="#F4D58D"/></g>
+          <g fill="#EDEBF2" opacity=".5"><circle cx="180" cy="160" r="1.6"/><circle cx="520" cy="320" r="1.6"/><circle cx="300" cy="120" r="1.4"/><circle cx="420" cy="430" r="1.6"/></g>
+        </svg>
+      </div>
+      <div class="stage-grid">
+        <div>
+          <span class="stage-eyebrow"><i></i> Navigate by what fits</span>
+          <h1 class="stage-title">Let the right roles <em>guide you home</em>.</h1>
+          <p class="stage-sub">Pathfinder is your lodestar through the noise — paste your profile and follow a constellation of fifteen roles across local, big tech, startup, and reach, each one charted with the reasoning behind it.</p>
+          <div class="stage-cta">
+            <form class="pill-input" onsubmit="return false"><input placeholder="Paste your LinkedIn URL or resume" aria-label="profile"></form>
+            <button class="btn btn-primary">Chart my matches</button>
+          </div>
+          <div class="stage-meta"><span><i>★</i> No account to start</span><span><i>★</i> Reasoning on each</span><span><i>★</i> Under a minute</span></div>
+        </div>
+        <div class="visual-col">
+          <div class="mcard floaty">
+            <div class="mc-top"><span class="mc-chip">Strong match</span><span class="mc-score">0.91</span></div>
+            <h4>Embedded Systems Intern</h4>
+            <div class="mc-co">Anduril Industries · Costa Mesa, CA</div>
+            <p class="mc-why">Your RTOS coursework and drone-firmware project align closely with their flight stack.</p>
+            <div class="mc-bars">
+              <div class="mc-bar"><span class="lab">Skills</span><span class="track"><i style="width:88%"></i></span><span>88</span></div>
+              <div class="mc-bar"><span class="lab">Coursework</span><span class="track"><i style="width:79%"></i></span><span>79</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="system">
+      <div class="sys-cell">
+        <div class="sys-label">Logo</div>
+        <div class="logo-stack">
+          <span class="lock"><svg viewBox="0 0 64 64"><path d="M32 6l5 21 21 5-21 5-5 21-5-21-21-5 21-5z" fill="#E9C46A"/></svg><span class="wm">Pathfinder</span></span>
+          <div class="logo-row">
+            <span class="lock logo-rev"><svg viewBox="0 0 64 64"><path d="M32 6l5 21 21 5-21 5-5 21-5-21-21-5 21-5z" fill="#0B1026"/></svg><span class="wm">Pathfinder</span></span>
+            <span class="logo-mark"><svg viewBox="0 0 64 64"><path d="M32 5l5.5 21.5L59 32l-21.5 5.5L32 59l-5.5-21.5L5 32l21.5-5.5z" fill="#E9C46A"/></svg></span>
+          </div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Palette</div>
+        <div class="swatches">
+          <div class="swatch"><i class="c1"></i><span class="sx"><b>Midnight</b><span>#0B1026</span></span></div>
+          <div class="swatch"><i class="c2"></i><span class="sx"><b>Star Gold</b><span>#E9C46A</span></span></div>
+          <div class="swatch"><i class="c3"></i><span class="sx"><b>Starlight</b><span>#B9C0E8</span></span></div>
+          <div class="swatch"><i class="c4"></i><span class="sx"><b>Moon</b><span>#F5F3FA</span></span></div>
+          <div class="swatch"><i class="c5"></i><span class="sx"><b>Nebula</b><span>#121A3A</span></span></div>
+        </div>
+      </div>
+      <div class="sys-cell">
+        <div class="sys-label">Typography</div>
+        <div class="type-aa">Aa</div>
+        <div class="type-meta">
+          <div class="tl"><b>Gloock</b> <span>Display / high-contrast serif</span></div>
+          <div class="tl" style="font-family:'Sora'"><b>Sora</b> <span style="font-family:var(--g-mono)">Body · Fragment Mono labels</span></div>
+        </div>
+        <p class="type-sample">Follow the few roles worth the application, not the whole sky.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer class="gfoot">
+  <div class="wrap gf-in">
+    <p>Five complete brand systems for <strong>Pathfinder</strong> — same name, same honest product, five different worlds. Tell me which one to build into the full site (or mix elements across them).</p>
+    <div class="gf-mono">Pathfinder · Option A · 5 directions</div>
+  </div>
+</footer>
+
+<script>
+  const rvEls = document.querySelectorAll('.rv');
+  const io = new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.06,rootMargin:'0px 0px -40px 0px'});
+  rvEls.forEach(el=>io.observe(el));
+  // Safety net: never leave a board hidden (slow loads / headless capture / no-IO).
+  setTimeout(()=>rvEls.forEach(el=>el.classList.add('in')), 1400);
+</script>
+</body>
+</html>

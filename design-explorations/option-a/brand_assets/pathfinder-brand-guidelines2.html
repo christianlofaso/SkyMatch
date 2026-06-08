@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pathfinder Brand Guidelines</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#F3EFE6; --paper:#FAF7F0; --sand:#E8DFCF;
+    --ink:#1F1B16; --ink-2:#4A443B; --stone:#8C8475;
+    --verm:#EB441A; --verm-700:#C8350F; --verm-100:#F8DDD2;
+    --moss:#3E7C59; --amber:#C98A1A;
+    --line:rgba(31,27,22,.12); --line-2:rgba(31,27,22,.22);
+    --display:'Fraunces',Georgia,serif;
+    --body:'Hanken Grotesk',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --ease:cubic-bezier(.2,.7,.2,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--cream); color:var(--ink);
+    font-family:var(--body); font-size:17px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(circle at 1px 1px, rgba(31,27,22,.035) 1px, transparent 0);
+    background-size:22px 22px;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+  h1,h2,h3,h4{font-family:var(--display);font-weight:600;line-height:1.06;letter-spacing:-.015em}
+  .mono{font-family:var(--mono)}
+  a{color:var(--verm-700);text-underline-offset:3px;text-decoration-thickness:1px}
+
+  /* eyebrow / section label */
+  .eyebrow{font-family:var(--mono);font-size:12px;font-weight:500;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--verm-700)}
+
+  /* hero */
+  header.hero{padding:96px 0 72px;border-bottom:1px solid var(--line)}
+  .hero .logo-hero{max-width:560px}
+  .hero .logo-hero .pf-lockup{font-size:clamp(40px,6.4vw,70px)}
+  /* logo lockup: square-and-diamond mark + Fraunces wordmark, as used on the site */
+  .pf-lockup{display:inline-flex;align-items:center;gap:.42em;line-height:1;
+    font-family:var(--display);font-weight:600;letter-spacing:-.02em;color:var(--ink)}
+  .pf-lockup .pf-icon{width:1.24em;height:1.24em;flex:none;display:block}
+  .pf-lockup .wm{display:block;white-space:nowrap}
+  .pf-lockup.rev{color:var(--cream)}
+  .pf-lockup.stacked{flex-direction:column;gap:.4em;text-align:center}
+  .pf-lockup.stacked .pf-icon{width:1.85em;height:1.85em}
+  .stage .pf-lockup{font-size:38px}
+  .stage .pf-lockup.stacked{font-size:34px}
+  .hero p.lede{font-family:var(--display);font-weight:400;font-style:italic;
+    font-size:clamp(22px,3.4vw,34px);line-height:1.25;color:var(--ink-2);
+    max-width:680px;margin-top:34px}
+  .hero .meta{margin-top:30px;display:flex;gap:28px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:13px;color:var(--stone);letter-spacing:.02em}
+  .hero .meta b{color:var(--ink);font-weight:500}
+
+  /* section scaffold */
+  section{padding:76px 0;border-bottom:1px solid var(--line)}
+  .sec-head{display:flex;align-items:baseline;gap:18px;margin-bottom:14px}
+  .sec-num{font-family:var(--mono);font-size:13px;color:var(--verm);font-weight:500}
+  h2.title{font-size:clamp(30px,4.6vw,46px)}
+  .sec-intro{max-width:660px;color:var(--ink-2);margin:18px 0 44px;font-size:18px}
+
+  /* logo showcases */
+  .stage{border-radius:22px;border:1px solid var(--line);padding:46px;
+    display:flex;align-items:center;justify-content:center;min-height:200px}
+  .stage.light{background:var(--paper)}
+  .stage.dark{background:var(--ink);border-color:transparent}
+  .stage svg{display:block;height:auto}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+  .cap{font-family:var(--mono);font-size:12px;color:var(--stone);
+    letter-spacing:.04em;margin-top:12px;display:block}
+  .cap b{color:var(--ink);font-weight:500}
+
+  /* concept callout */
+  .concept{display:grid;grid-template-columns:160px 1fr;gap:34px;align-items:center;
+    background:var(--paper);border:1px solid var(--line);border-radius:22px;
+    padding:34px;margin-top:24px}
+  .concept .mark-box svg{width:140px;height:140px;display:block}
+  .concept h4{font-size:21px;margin-bottom:8px}
+  .concept p{color:var(--ink-2)}
+
+  /* dos and donts chips */
+  .rules{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:30px}
+  .rule{display:flex;gap:12px;align-items:flex-start;padding:16px 18px;
+    border-radius:14px;border:1px solid var(--line);background:var(--paper);font-size:15.5px}
+  .rule .ico{flex:0 0 22px;width:22px;height:22px;border-radius:50%;
+    display:grid;place-items:center;font-size:13px;color:var(--paper);margin-top:1px}
+  .rule.do .ico{background:var(--moss)}
+  .rule.dont .ico{background:var(--verm)}
+
+  /* color palette */
+  .swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+  .sw{border-radius:16px;overflow:hidden;border:1px solid var(--line);background:var(--paper)}
+  .sw .chip{height:104px;display:flex;align-items:flex-end;padding:12px;cursor:pointer;position:relative}
+  .sw .chip .copy{position:absolute;top:10px;right:12px;font-family:var(--mono);
+    font-size:11px;opacity:0;transition:opacity .15s}
+  .sw .chip:hover .copy{opacity:.85}
+  .sw .body{padding:13px 14px 15px}
+  .sw .name{font-weight:600;font-size:15px}
+  .sw .role{color:var(--stone);font-size:13px;margin-top:2px;line-height:1.4}
+  .sw .hex{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);margin-top:7px;letter-spacing:.02em}
+  .palette-label{font-family:var(--mono);font-size:12px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--stone);margin:34px 0 16px}
+
+  /* typography specimens */
+  .type-card{background:var(--paper);border:1px solid var(--line);border-radius:22px;
+    padding:34px 36px;margin-bottom:22px}
+  .type-card .glyph{font-size:clamp(56px,9vw,104px);line-height:1;margin-bottom:10px}
+  .type-card .row{display:flex;justify-content:space-between;align-items:baseline;
+    flex-wrap:wrap;gap:10px;border-top:1px solid var(--line);padding-top:18px;margin-top:18px}
+  .type-card .fam{font-size:20px;font-weight:600}
+  .type-card .use{color:var(--stone);font-size:14px;max-width:380px}
+  .type-card .weights{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);letter-spacing:.03em}
+  .specimen-display{font-family:var(--display)}
+  .specimen-body{font-family:var(--body)}
+  .specimen-mono{font-family:var(--mono)}
+
+  /* scale table */
+  table.scale{width:100%;border-collapse:collapse;margin-top:26px;font-size:15px}
+  table.scale th{text-align:left;font-family:var(--mono);font-size:11px;font-weight:500;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--stone);
+    padding:0 0 12px;border-bottom:1px solid var(--line-2)}
+  table.scale td{padding:13px 0;border-bottom:1px solid var(--line);vertical-align:baseline}
+  table.scale td.mono{font-family:var(--mono);font-size:13px;color:var(--ink-2)}
+
+  /* voice */
+  .voice-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px}
+  .vbox{border-radius:16px;padding:22px 24px;font-size:16px}
+  .vbox.good{background:var(--moss);color:#fff}
+  .vbox.bad{background:#fff;border:1px solid var(--line);color:var(--stone)}
+  .vbox .tag{font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;display:block;margin-bottom:10px;opacity:.85}
+  .vbox.bad .tag{color:var(--verm-700)}
+  .vbox.good p{color:#fff}
+  .vbox.bad p{text-decoration:line-through;text-decoration-color:rgba(235,68,26,.5)}
+
+  .callout{display:flex;gap:18px;background:var(--ink);color:var(--cream);
+    border-radius:18px;padding:26px 30px;margin:30px 0;align-items:flex-start}
+  .callout .big{font-family:var(--display);font-size:46px;line-height:.8;color:var(--verm)}
+  .callout h4{color:var(--cream);font-size:20px;margin-bottom:6px}
+  .callout p{color:rgba(243,239,230,.78);font-size:15.5px}
+  .callout .mono{color:var(--cream)}
+
+  .blocklist{display:flex;flex-wrap:wrap;gap:9px;margin-top:22px}
+  .blocklist span{font-family:var(--mono);font-size:13px;padding:6px 12px;border-radius:999px;
+    background:var(--verm-100);color:var(--verm-700);text-decoration:line-through;
+    text-decoration-color:rgba(200,53,15,.55)}
+
+  /* principles list */
+  .principles{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:8px}
+  .principle{padding-top:20px;border-top:2px solid var(--ink)}
+  .principle .n{font-family:var(--mono);font-size:12px;color:var(--verm-700)}
+  .principle h4{font-size:19px;margin:6px 0 7px}
+  .principle p{color:var(--ink-2);font-size:15.5px}
+
+  /* tokens code */
+  .code{background:var(--ink);border-radius:18px;padding:26px 28px;position:relative;
+    overflow:auto;font-family:var(--mono);font-size:13px;line-height:1.85;color:#E8E2D6}
+  .code .c-var{color:#F0A58C}
+  .code .c-val{color:#9FBFA6}
+  .code .c-com{color:#6f6a60}
+  .code button.copy-btn{position:absolute;top:16px;right:16px;font-family:var(--mono);
+    font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--cream);
+    background:rgba(243,239,230,.1);border:1px solid rgba(243,239,230,.2);
+    border-radius:8px;padding:7px 11px;cursor:pointer}
+  .code button.copy-btn:hover{background:rgba(243,239,230,.18)}
+
+  /* UI sample */
+  .ui-demo{background:var(--paper);border:1px solid var(--line);border-radius:22px;padding:34px}
+  .btn{font-family:var(--body);font-weight:600;font-size:15px;border:none;cursor:pointer;
+    border-radius:999px;padding:12px 22px;transition:transform var(--ease),background var(--ease)}
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:var(--verm);color:#fff}
+  .btn-primary:hover{background:var(--verm-700)}
+  .btn-ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line-2)}
+  .btn-ghost:hover{border-color:var(--ink)}
+  .match-card{margin-top:26px;background:var(--cream);border:1px solid var(--line);
+    border-radius:18px;padding:22px 24px;max-width:440px}
+  .match-card .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
+    font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:5px 11px;
+    border-radius:999px;background:var(--amber-100,#F4E7CC);color:var(--amber)}
+  .match-card h4{font-size:22px;margin:14px 0 3px}
+  .match-card .co{color:var(--stone);font-size:14px;font-family:var(--mono)}
+  .match-card .why{margin-top:14px;font-size:15px;color:var(--ink-2)}
+  .match-card .foot{margin-top:18px;display:flex;gap:10px;align-items:center;
+    padding-top:16px;border-top:1px solid var(--line)}
+  .match-card .dot{width:8px;height:8px;border-radius:50%;background:var(--moss)}
+  .match-card .foot span{font-size:13.5px;color:var(--ink)}
+
+  footer{padding:60px 0 90px;text-align:center}
+  footer .mono{font-size:13px;color:var(--stone);letter-spacing:.04em}
+  footer .mk svg{width:44px;height:44px;margin-bottom:18px}
+
+  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:var(--ink);color:var(--cream);font-family:var(--mono);font-size:13px;
+    padding:11px 18px;border-radius:999px;opacity:0;pointer-events:none;
+    transition:opacity .2s,transform .2s;z-index:50}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media(max-width:760px){
+    .grid-2,.grid-3,.swatches,.voice-grid,.principles{grid-template-columns:1fr}
+    .swatches{grid-template-columns:1fr 1fr}
+    .concept{grid-template-columns:1fr;text-align:center}
+    .concept .mark-box{justify-self:center}
+    .rules{grid-template-columns:1fr}
+    section{padding:56px 0}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="logo-hero"><span class="pf-lockup"><svg class="pf-icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--ink)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg><span class="wm">Pathfinder</span></span></div>
+    <p class="lede">Stop spraying applications into the void. Find the fifteen roles that actually fit, and the people who can get you in.</p>
+    <div class="meta">
+      <span><b>Brand guidelines</b> v1</span>
+      <span><b>pathfindermatch.com</b></span>
+      <span>Career guidance for CS, CompE, and EE underclassmen</span>
+    </div>
+  </div>
+</header>
+
+<!-- 01 ESSENCE -->
+<section id="essence">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">01</span><span class="eyebrow">The brand in one breath</span></div>
+    <h2 class="title">Honest by default.<br>Never hypey.</h2>
+    <p class="sec-intro">Pathfinder was built by someone who sent 400 applications and got three interviews. The whole product is an argument against the spray-and-pray approach, so the brand has to sound like it means that. Plain, specific, a little blunt. Talk to an anxious sophomore the way a sharp friend who already made it through would.</p>
+
+    <div class="callout">
+      <span class="big">3</span>
+      <div>
+        <h4>The number that started it</h4>
+        <p>400 applications. Three interviews. A 0.75 percent hit rate. That story is the brand. Lead with real numbers and real mechanisms, not promises.</p>
+      </div>
+    </div>
+
+    <div class="concept">
+      <div class="mark-box"><svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--ink)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg></div>
+      <div>
+        <h4>What the mark means</h4>
+        <p>A single marker, centered and held inside a steady frame. The dark square is the focus Pathfinder imposes: a small, deliberate space instead of an endless feed. The vermilion diamond is the one role worth your attention, set dead center where you cannot miss it. It is the whole thesis, the shortlist and not the spray, compressed into one shape.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 02 LOGO -->
+<section id="logo">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">02</span><span class="eyebrow">Logo</span></div>
+    <h2 class="title">One mark, a few homes</h2>
+    <p class="sec-intro">Fraunces gives the wordmark a confident, editorial feel that keeps the tech product from looking cold. Use the primary lockup wherever there is room. Reach for the mark alone only when the name is already obvious from context.</p>
+
+    <div class="grid-2">
+      <div>
+        <div class="stage light"><span class="pf-lockup"><svg class="pf-icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--ink)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg><span class="wm">Pathfinder</span></span></div>
+        <span class="cap"><b>Primary lockup.</b> Ink on cream or any light, calm surface.</span>
+      </div>
+      <div>
+        <div class="stage dark"><span class="pf-lockup rev"><svg class="pf-icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--cream)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg><span class="wm">Pathfinder</span></span></div>
+        <span class="cap"><b>Reversed.</b> Cream on ink. Use on dark or busy backgrounds.</span>
+      </div>
+    </div>
+
+    <div class="grid-3" style="margin-top:22px">
+      <div>
+        <div class="stage light"><span class="pf-lockup stacked"><svg class="pf-icon" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--ink)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg><span class="wm">Pathfinder</span></span></div>
+        <span class="cap"><b>Stacked.</b> Narrow or square spaces.</span>
+      </div>
+      <div>
+        <div class="stage light" style="min-height:200px"><svg style="width:118px;height:118px" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--ink)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg></div>
+        <span class="cap"><b>Mark.</b> Favicons, avatars, loaders.</span>
+      </div>
+      <div>
+        <div class="stage light" style="min-height:200px"><svg style="width:118px;height:118px" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--ink)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg></div>
+        <span class="cap"><b>App icon.</b> The mark is already a tile. Use it as is.</span>
+      </div>
+    </div>
+
+    <div class="rules">
+      <div class="rule do"><span class="ico">&#10003;</span><div>Keep clear space equal to half the mark's height on every side.</div></div>
+      <div class="rule do"><span class="ico">&#10003;</span><div>Keep the diamond vermilion inside an ink frame. On dark backgrounds, flip the frame to cream.</div></div>
+      <div class="rule do"><span class="ico">&#10003;</span><div>Switch to the reversed lockup the moment contrast drops on a dark or photographic background.</div></div>
+      <div class="rule do"><span class="ico">&#10003;</span><div>Give the wordmark room. Minimum width 120px on screen, 24mm in print.</div></div>
+      <div class="rule dont"><span class="ico">&times;</span><div>Do not recolor the wordmark or fill the whole mark in a single flat color.</div></div>
+      <div class="rule dont"><span class="ico">&times;</span><div>Do not stretch, rotate, outline, or add drop shadows and gradients.</div></div>
+      <div class="rule dont"><span class="ico">&times;</span><div>Do not swap the typeface or rebuild the wordmark in anything other than Fraunces.</div></div>
+      <div class="rule dont"><span class="ico">&times;</span><div>Do not crowd it. If it feels tight, it is. Add space.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 03 COLOR -->
+<section id="color">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">03</span><span class="eyebrow">Color</span></div>
+    <h2 class="title">Warm paper, one loud accent</h2>
+    <p class="sec-intro">Cream does almost all the work. Vermilion is the only loud voice in the room, so it stays rare and meaningful: actions, the destination, the moments that matter. Tap any swatch to copy its hex.</p>
+
+    <div class="palette-label">Core</div>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:#F3EFE6;border-bottom:1px solid var(--line)" data-hex="#F3EFE6"><span class="copy mono" style="color:#1F1B16">copy</span></div><div class="body"><div class="name">Cream</div><div class="role">Primary background, paper</div><div class="hex">#F3EFE6</div></div></div>
+      <div class="sw"><div class="chip" style="background:#FAF7F0;border-bottom:1px solid var(--line)" data-hex="#FAF7F0"><span class="copy mono" style="color:#1F1B16">copy</span></div><div class="body"><div class="name">Paper</div><div class="role">Elevated surfaces, cards</div><div class="hex">#FAF7F0</div></div></div>
+      <div class="sw"><div class="chip" style="background:#E8DFCF" data-hex="#E8DFCF"><span class="copy mono" style="color:#1F1B16">copy</span></div><div class="body"><div class="name">Sand</div><div class="role">Input fills, dividers</div><div class="hex">#E8DFCF</div></div></div>
+      <div class="sw"><div class="chip" style="background:#1F1B16" data-hex="#1F1B16"><span class="copy mono" style="color:#F3EFE6">copy</span></div><div class="body"><div class="name">Ink</div><div class="role">Primary text, dark surfaces</div><div class="hex">#1F1B16</div></div></div>
+      <div class="sw"><div class="chip" style="background:#4A443B" data-hex="#4A443B"><span class="copy mono" style="color:#F3EFE6">copy</span></div><div class="body"><div class="name">Ink 2</div><div class="role">Secondary text</div><div class="hex">#4A443B</div></div></div>
+      <div class="sw"><div class="chip" style="background:#8C8475" data-hex="#8C8475"><span class="copy mono" style="color:#F3EFE6">copy</span></div><div class="body"><div class="name">Stone</div><div class="role">Muted text, captions</div><div class="hex">#8C8475</div></div></div>
+      <div class="sw"><div class="chip" style="background:#EB441A" data-hex="#EB441A"><span class="copy mono" style="color:#fff">copy</span></div><div class="body"><div class="name">Vermilion</div><div class="role">Accent, primary action</div><div class="hex">#EB441A</div></div></div>
+      <div class="sw"><div class="chip" style="background:#C8350F" data-hex="#C8350F"><span class="copy mono" style="color:#fff">copy</span></div><div class="body"><div class="name">Vermilion 700</div><div class="role">Hover, pressed, links</div><div class="hex">#C8350F</div></div></div>
+    </div>
+
+    <div class="palette-label">Functional, used sparingly</div>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:#F8DDD2" data-hex="#F8DDD2"><span class="copy mono" style="color:#1F1B16">copy</span></div><div class="body"><div class="name">Vermilion 100</div><div class="role">Accent tint background</div><div class="hex">#F8DDD2</div></div></div>
+      <div class="sw"><div class="chip" style="background:#3E7C59" data-hex="#3E7C59"><span class="copy mono" style="color:#fff">copy</span></div><div class="body"><div class="name">Moss</div><div class="role">Positive, strong match</div><div class="hex">#3E7C59</div></div></div>
+      <div class="sw"><div class="chip" style="background:#C98A1A" data-hex="#C98A1A"><span class="copy mono" style="color:#fff">copy</span></div><div class="body"><div class="name">Amber</div><div class="role">Caution, reach role</div><div class="hex">#C98A1A</div></div></div>
+      <div class="sw"><div class="chip" style="background:#E8DFCF" data-hex="#E8DFCF"><span class="copy mono" style="color:#1F1B16">copy</span></div><div class="body"><div class="name">Line</div><div class="role">Hairline borders, 12% ink</div><div class="hex">rgba(31,27,22,.12)</div></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 04 TYPE -->
+<section id="type">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">04</span><span class="eyebrow">Typography</span></div>
+    <h2 class="title">Three voices, clear jobs</h2>
+    <p class="sec-intro">A characterful serif for display, a clean grotesk for reading, a mono for anything that should feel like data. Never mix the jobs. Headlines do not get set in Hanken, and body copy never gets set in Fraunces.</p>
+
+    <div class="type-card">
+      <div class="glyph specimen-display">Aa</div>
+      <div class="specimen-display" style="font-size:30px;line-height:1.15">Find the path, not just the posting.</div>
+      <div class="row">
+        <div class="fam specimen-display">Fraunces</div>
+        <div class="use">Display and headlines. High optical size, weights 500 to 600. Italic for warmth in pull quotes. Tighten tracking on large sizes.</div>
+        <div class="weights">400 / 500 / 600 / 700</div>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="glyph specimen-body" style="font-weight:600">Aa</div>
+      <div class="specimen-body" style="font-size:19px;line-height:1.6;max-width:620px">Fifteen curated matches across local, big tech, startup, and reach. Each one comes with the reasoning behind it, so you know why it landed in your list.</div>
+      <div class="row">
+        <div class="fam specimen-body" style="font-family:var(--body)">Hanken Grotesk</div>
+        <div class="use">Body, UI labels, buttons. The workhorse. Regular for paragraphs, 600 for emphasis and controls.</div>
+        <div class="weights">400 / 500 / 600 / 700</div>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="glyph specimen-mono">Aa</div>
+      <div class="specimen-mono" style="font-size:16px;letter-spacing:.02em">MATCH_SCORE 0.91  ·  big_tech  ·  warm_intro: 2 paths</div>
+      <div class="row">
+        <div class="fam specimen-mono" style="font-family:var(--mono)">JetBrains Mono</div>
+        <div class="use">Data, tags, metadata, code, eyebrows. Anything that should read as a system speaking, not a person.</div>
+        <div class="weights">400 / 500 / 600</div>
+      </div>
+    </div>
+
+    <table class="scale">
+      <thead><tr><th>Token</th><th>Size</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">text-5xl</td><td class="mono">61px</td><td>Hero display, one per page</td></tr>
+        <tr><td class="mono">text-4xl</td><td class="mono">49px</td><td>Section titles</td></tr>
+        <tr><td class="mono">text-3xl</td><td class="mono">39px</td><td>Subsection headings</td></tr>
+        <tr><td class="mono">text-2xl</td><td class="mono">31px</td><td>Card titles, match names</td></tr>
+        <tr><td class="mono">text-xl</td><td class="mono">25px</td><td>Lead paragraphs</td></tr>
+        <tr><td class="mono">text-lg</td><td class="mono">20px</td><td>Emphasis body</td></tr>
+        <tr><td class="mono">text-base</td><td class="mono">16px</td><td>Body copy</td></tr>
+        <tr><td class="mono">text-sm</td><td class="mono">14px</td><td>Secondary, captions</td></tr>
+        <tr><td class="mono">text-xs</td><td class="mono">12px</td><td>Eyebrows, tags, metadata</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 05 VOICE -->
+<section id="voice">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">05</span><span class="eyebrow">Voice and tone</span></div>
+    <h2 class="title">Say the true thing</h2>
+    <p class="sec-intro">Every line should sound like it could survive a skeptical sophomore reading it at 1am. Concrete over clever. Mechanism over magic. If a sentence could appear on any other job tool, rewrite it.</p>
+
+    <div class="voice-grid">
+      <div class="vbox good"><span class="tag">Say this</span><p>400 applications. 3 interviews. Mass applying is broken, so we built something that is not mass applying.</p></div>
+      <div class="vbox bad"><span class="tag">Not this</span><p>Revolutionize your job search with AI-powered magic and unlock unlimited opportunities!</p></div>
+      <div class="vbox good"><span class="tag">Say this</span><p>This one is a reach. Here is exactly why it might still be worth a shot.</p></div>
+      <div class="vbox bad"><span class="tag">Not this</span><p>Land your DREAM job effortlessly. Your future starts now!!!</p></div>
+      <div class="vbox good"><span class="tag">Say this</span><p>We found two people who can refer you in. Both went to UIUC. Here is how to reach out.</p></div>
+      <div class="vbox bad"><span class="tag">Not this</span><p>Supercharge your network and 10x your reach with our seamless, world-class platform.</p></div>
+    </div>
+
+    <div class="callout" style="margin-top:36px">
+      <span class="big mono" style="font-size:54px">&mdash;</span>
+      <div>
+        <h4>The em dash rule</h4>
+        <p class="mono" style="font-size:14px;letter-spacing:.02em">Hard rule. No em dashes. No en dashes used as dashes. Anywhere. Copy, UI, marketing, email.</p>
+        <p style="margin-top:10px">Use a period when two thoughts can stand apart. Use a comma when they lean on each other. Rewrite when neither fits. Hyphens inside compound words stay fine: warm-intro, big-tech, real-time.</p>
+      </div>
+    </div>
+
+    <div class="palette-label">Words to never ship</div>
+    <div class="blocklist">
+      <span>revolutionary</span><span>game-changing</span><span>supercharge</span>
+      <span>unlock</span><span>10x</span><span>seamless</span><span>effortless</span>
+      <span>magic</span><span>disrupt</span><span>synergy</span><span>cutting-edge</span>
+      <span>world-class</span><span>rockstar</span><span>ninja</span><span>next-gen</span>
+    </div>
+
+    <div class="principles" style="margin-top:48px">
+      <div class="principle"><div class="n">a</div><h4>Lead with the number</h4><p>A real statistic beats an adjective every time. Show the hit rate, the count, the reasoning.</p></div>
+      <div class="principle"><div class="n">b</div><h4>Name the mechanism</h4><p>Say what the product actually does. Warm intros through shared background, not "smart matching."</p></div>
+      <div class="principle"><div class="n">c</div><h4>Talk like a person</h4><p>Say "you," not "users." Contractions welcome. Read it aloud. If it sounds like a brochure, cut it.</p></div>
+      <div class="principle"><div class="n">d</div><h4>Admit the hard parts</h4><p>A reach is a reach. Trust comes from being straight about odds, not from inflating them.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 SYSTEM IN USE -->
+<section id="system">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">06</span><span class="eyebrow">The system in use</span></div>
+    <h2 class="title">How it comes together</h2>
+    <p class="sec-intro">Pill buttons, generous radius, hairline borders, vermilion reserved for the one action that matters on screen. Below is the brand applied to a match card, the core unit of the product.</p>
+
+    <div class="ui-demo">
+      <button class="btn btn-primary">See your matches</button>
+      <button class="btn btn-ghost" style="margin-left:10px">How it works</button>
+
+      <div class="match-card">
+        <span class="badge" style="background:#F4E7CC">Reach</span>
+        <h4 class="specimen-display">Embedded Systems Intern</h4>
+        <div class="co mono">Anduril Industries · Costa Mesa, CA</div>
+        <p class="why">Your RTOS coursework and the drone firmware project line up with their stack. The bar is high, but the fit is real.</p>
+        <div class="foot"><span class="dot"></span><span class="mono" style="font-size:13px">2 warm intros · both UIUC alumni</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 07 TOKENS -->
+<section id="tokens" style="border-bottom:none">
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">07</span><span class="eyebrow">Design tokens</span></div>
+    <h2 class="title">Copy and build</h2>
+    <p class="sec-intro">The same values, ready to paste. A standalone <span class="mono" style="font-size:14px">pathfinder-tokens.css</span> file ships alongside this document with the full set including spacing, radius, shadow, and motion.</p>
+
+    <div class="code" id="tok">
+<button class="copy-btn" onclick="copyTokens()">Copy</button><span class="c-com">/* core */</span>
+<span class="c-var">--pf-cream</span>:    <span class="c-val">#F3EFE6</span>;
+<span class="c-var">--pf-paper</span>:    <span class="c-val">#FAF7F0</span>;
+<span class="c-var">--pf-sand</span>:     <span class="c-val">#E8DFCF</span>;
+<span class="c-var">--pf-ink</span>:      <span class="c-val">#1F1B16</span>;
+<span class="c-var">--pf-ink-2</span>:    <span class="c-val">#4A443B</span>;
+<span class="c-var">--pf-stone</span>:    <span class="c-val">#8C8475</span>;
+<span class="c-var">--pf-verm</span>:     <span class="c-val">#EB441A</span>;
+<span class="c-var">--pf-verm-700</span>: <span class="c-val">#C8350F</span>;
+<span class="c-var">--pf-verm-100</span>: <span class="c-val">#F8DDD2</span>;
+<span class="c-var">--pf-moss</span>:     <span class="c-val">#3E7C59</span>;
+<span class="c-var">--pf-amber</span>:    <span class="c-val">#C98A1A</span>;
+
+<span class="c-com">/* type */</span>
+<span class="c-var">--pf-font-display</span>: <span class="c-val">'Fraunces', Georgia, serif</span>;
+<span class="c-var">--pf-font-body</span>:    <span class="c-val">'Hanken Grotesk', system-ui, sans-serif</span>;
+<span class="c-var">--pf-font-mono</span>:    <span class="c-val">'JetBrains Mono', monospace</span>;
+
+<span class="c-com">/* radius */</span>
+<span class="c-var">--pf-radius-sm</span>: <span class="c-val">8px</span>;
+<span class="c-var">--pf-radius-md</span>: <span class="c-val">14px</span>;
+<span class="c-var">--pf-radius-lg</span>: <span class="c-val">22px</span>;
+<span class="c-var">--pf-radius-pill</span>: <span class="c-val">999px</span>;</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="mk"><svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="64" height="64" rx="17" fill="var(--ink)"/><rect x="21" y="21" width="22" height="22" rx="5" transform="rotate(45 32 32)" fill="var(--verm)"/></svg></div>
+    <div class="mono">Pathfinder · Brand Guidelines v1 · pathfindermatch.com</div>
+    <div class="mono" style="margin-top:6px;color:var(--line-2)">Fraunces · Hanken Grotesk · JetBrains Mono</div>
+  </div>
+</footer>
+
+<div class="toast" id="toast">copied</div>
+
+<script>
+  const toast = document.getElementById('toast');
+  let toastTimer;
+  function showToast(msg){
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>toast.classList.remove('show'), 1400);
+  }
+  function copyText(t, label){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(()=>showToast(label||('copied '+t))).catch(()=>fallback(t,label));
+    } else { fallback(t,label); }
+  }
+  function fallback(t,label){
+    const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta);
+    ta.select(); try{document.execCommand('copy'); showToast(label||('copied '+t));}catch(e){} ta.remove();
+  }
+  document.querySelectorAll('.chip[data-hex]').forEach(c=>{
+    c.addEventListener('click',()=>copyText(c.dataset.hex,'copied '+c.dataset.hex));
+  });
+  function copyTokens(){
+    const raw = document.getElementById('tok').innerText.replace(/^Copy\s*/,'').trim();
+    copyText(raw,'tokens copied');
+  }
+</script>
+</body>
+</html>
