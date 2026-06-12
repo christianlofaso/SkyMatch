@@ -14,7 +14,10 @@ upsert keyed by url, so it's safe to re-run on any cadence.
 
     cd backend && ./venv/Scripts/python.exe -m worker.ingest
 
-Windows Task Scheduler (every ~6h):
+In PRODUCTION this runs as a Railway cron service every ~8h (cronSchedule "0 */8 * * *"
+in railway.worker.toml) — a fresh container per tick that exits when the pass finishes.
+
+Windows Task Scheduler (local dev, every ~8h):
     Program/script:  C:\\Users\\chris\\Desktop\\pathfinder\\backend\\venv\\Scripts\\python.exe
     Arguments:       -m worker.ingest
     Start in:        C:\\Users\\chris\\Desktop\\pathfinder\\backend
