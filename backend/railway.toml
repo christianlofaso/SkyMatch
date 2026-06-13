@@ -19,7 +19,10 @@ numReplicas = 2
 preDeployCommand = ["alembic upgrade head"]
 # Bind the platform-injected $PORT. (Mirrors the Dockerfile CMD; explicit here so the web
 # service is unambiguous even if the image default changes.)
-startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+# MUST be wrapped in `sh -c`: Railway applies startCommand to a Dockerfile-based service in
+# EXEC form (no shell), so a bare `$PORT` is passed to uvicorn literally ("Error: '$PORT' is
+# not a valid integer") and the app crashes → healthcheck times out. The shell expands it.
+startCommand = "sh -c 'uvicorn main:app --host 0.0.0.0 --port $PORT'"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
