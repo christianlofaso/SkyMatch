@@ -48,10 +48,12 @@ function FIco({ children }: { children: ReactNode }) {
 // nothing is stated.
 function termOf(it: Internship): string {
   if (it.term && it.term.trim()) return it.term.trim();
-  const hay = `${it.title} ${it.company_description}`;
-  const m = /(spring|summer|fall|winter)\s*['’]?\s*(20\d{2}|\d{2})\b/i.exec(hay);
+  // Include the application URL: the season often survives only in the slug ("...intern-fall-2026")
+  // when the title was cleaned and the stored title/description lost it. Separator allows '-'/'_'.
+  const hay = `${it.title} ${it.company_description} ${it.application_url ?? ""}`;
+  const m = /\b(spring|summer|fall|autumn|winter)[\s.'’_-]*((?:20)?\d{2})\b/i.exec(hay);
   if (m) {
-    const season = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+    const season = m[1].toLowerCase() === "autumn" ? "Fall" : m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
     const year = m[2].length === 2 ? `20${m[2]}` : m[2];
     return `${season} ${year}`;
   }

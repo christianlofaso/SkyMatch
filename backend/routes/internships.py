@@ -242,13 +242,15 @@ def _clean_posted(v: str | None) -> str | None:
 
 
 def _term_from_text(*texts: str | None) -> str | None:
-    """Deterministically recover a role term from RAW listing text (search_title/snippet/title).
-    The Haiku parse strips the season from the cleaned `title` (e.g. "...RF (Fall 2026)" →
-    "...RF"), but it survives in search_title — so serving recovers it here with zero LLM,
-    covering every already-parsed row without a re-parse. Prefers a season+year, then a bare
+    """Deterministically recover a role term from RAW listing text (search_title/snippet/title/
+    URL). The Haiku parse strips the season from the cleaned `title` (e.g. "...RF (Fall 2026)" →
+    "...RF"), and the stored search_title is often truncated ("...Intern ..."), but the season
+    usually survives in the URL SLUG ("...software-intern-fall-2026"). So serving recovers it
+    here with zero LLM, covering every already-parsed row without a re-parse. The separator class
+    allows '-'/'_' so slug forms like "fall-2026" match. Prefers a season+year, then a bare
     season, then an employment type. None when the text states no term."""
     hay = " ".join(t for t in texts if t)
-    m = re.search(r"\b(spring|summer|fall|autumn|winter)\b[\s.,'’]*((?:20)?\d{2})\b", hay, re.I)
+    m = re.search(r"\b(spring|summer|fall|autumn|winter)\b[\s.,'’_-]*((?:20)?\d{2})\b", hay, re.I)
     if m:
         season = _SEASON_FIX.get(m.group(1).lower(), m.group(1).capitalize())
         yr = m.group(2)
@@ -301,9 +303,10 @@ def _build_internship(listing: dict, bucket: str) -> Internship:
         # Drawer fact-grid fields ("" from the parse → None so the frontend treats them as absent).
         company_size=(parsed.get("company_size") or None),
         # Term: prefer the parse's value (new rows); else recover deterministically from the raw
-        # search_title/snippet (covers every pre-existing parsed row, whose title was stripped).
+        # search_title/snippet/URL (covers every pre-existing parsed row — the title was stripped
+        # and the search_title is often truncated, but the season survives in the URL slug).
         term=(parsed.get("term") or _term_from_text(
-            parsed.get("title"), listing.get("search_title"), listing.get("snippet"),
+            parsed.get("title"), listing.get("search_title"), listing.get("snippet"), listing.get("url"),
         )),
         # Posted date captured at ingestion (snippet parse or SPA render); strip a leading
         # "Posted:" so the box (already labeled "Posted") shows just "4 weeks ago". The drawer
