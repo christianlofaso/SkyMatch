@@ -5,7 +5,7 @@ The launch architecture decided in [`brainstorms/2026-06-05-backend-deploy.md`](
 ```
 Vercel (frontend)            Railway (compute + Redis)            Supabase (Postgres + Auth)
   app.<domain>  ──HTTPS──►   api.<domain>  ──► web ×2 replicas ──►  Postgres (pooler :6543)
-  (Next.js 14)   (Cloudflare   (FastAPI)        worker (cron 6h) ──►  Auth (magic-link)
+  (Next.js 14)   (Cloudflare   (FastAPI)        worker (cron 8h) ──►  Auth (magic-link)
                   in front)                     Redis (guard/governor)
 ```
 
@@ -48,7 +48,7 @@ New migration: `alembic revision -m "..."` → edit → `alembic upgrade head` l
 | Service | Config | Start | Notes |
 |---------|--------|-------|-------|
 | **web** | `backend/railway.toml` (default config path) | `uvicorn main:app --host 0.0.0.0 --port $PORT` | **2 replicas**; `preDeployCommand = alembic upgrade head`; healthcheck `/health`. |
-| **worker** | set Config Path → `backend/railway.worker.toml` | `python -m worker.ingest` | **Cron `0 */6 * * *`**; run-to-exit; no replicas. |
+| **worker** | set Config Path → `backend/railway.worker.toml` | `python -m worker.ingest` | **Cron `0 */8 * * *`**; run-to-exit; no replicas. |
 | **Redis** | Railway Redis plugin | — | Injects `REDIS_URL` into web + worker. |
 
 Both web + worker use the same `backend/Dockerfile`. The multi-replica web is only correct

@@ -84,7 +84,7 @@ class BatchEnvelope:       index: int;  status: "ok" | "error";  data?: QuickAna
 ```python
 class Connection:    name, title, company, linkedin_url, commonality_type, commonality_detail, why_relevant
 class Internship:    title, company, location, company_description, fit_explanation="",  # default "" — see below
-                     application_url, bucket, reach_gap
+                     application_url, bucket, reach_gap, logo_url=None  # logo_url: lib/logos, None → letter avatar
 class InternshipBuckets: local, big_tech, startup, reach — each list[Internship] max 5
 ```
 > `Internship.fit_explanation` now **defaults `""`**: the zero-LLM `/run` feed ships it empty and the results page fills it lazily via `/internships/annotate` (see [routes.md](routes.md)). Keep `InternshipSchema.fit_explanation` as `.default("")` in `pathfinder.ts` in sync.
@@ -94,9 +94,11 @@ class InternshipBuckets: local, big_tech, startup, reach — each list[Internshi
 class AnnotateJobInput: url: str;  bucket: Literal["local","big_tech","startup","reach"]
 class AnnotateRequest:  profile: UnifiedProfile;  jobs: list[AnnotateJobInput]
 class AnnotateError:    message: str;  code: Literal["NOT_FOUND","ANNOTATE_FAILED","INTERNAL"]
-class AnnotateEnvelope: index: int;  status: "ok" | "error";  fit_explanation?: str;  reach_gap?: str;  error?: AnnotateError
+class AnnotateEnvelope: index: int;  status: "ok" | "error";  fit_explanation?: str;  why: list[str]=[];  have: list[str]=[];  need: list[str]=[];  reach_gap?: str;  error?: AnnotateError
 ```
 Frontend mirror: `AnnotateEnvelopeSchema` / `AnnotateEnvelope` in `pathfinder.ts`.
+
+> `why`/`have`/`need` are the drawer's enriched content (added when the option-j UI was ported): `why` = 2-3 "why you fit" bullets; `have` = skills the student already brings (⊆ the listing's parsed skills); `need` = skills the posting wants that the profile lacks. The slim fit-only annotate call (`_annotate_fit_sync`, `MODEL_MID`, max_tokens 400) emits all of them in one JSON object alongside `fit_explanation`/`reach_gap`; the page renders `why`/`have`/`need` in the role drawer. Old `annotate_cache` entries predating the enrichment lack these keys and degrade to `[]` (read with `.get(..., [])`).
 
 ### Request/Response
 ```python
