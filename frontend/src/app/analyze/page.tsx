@@ -9,23 +9,35 @@ import {
   type AnalysisResponse,
   type UnifiedProfile,
 } from "@/types/pathfinder";
-import VerdictCard from "@/components/VerdictCard";
-import BreakdownView from "@/components/BreakdownView";
+import AnalysisView from "@/components/AnalysisView";
+import { AppShell } from "@/components/AppShell";
 import { SignInGate } from "@/components/SignInGate";
 import { useAuth } from "@/lib/auth-context";
-import { getRun, latestRunId, saveAnalysis, hasUsedFreeAnalysis, markFreeAnalysisUsed } from "@/lib/storage";
+import { getRun, activeRunId, saveAnalysis, hasUsedFreeAnalysis, markFreeAnalysisUsed } from "@/lib/storage";
 
-type Tab = "url" | "paste";
 // "loading" = waiting for the verdict (fetch+extract+match); "streaming" = verdict shown,
 // Phase 3 filling in; "done" = stream complete; "error" = failed.
 type Status = "idle" | "loading" | "streaming" | "done" | "error";
 
-function Pulse() {
+const AZ_STEPS = ["Reading the posting", "Extracting requirements", "Matching your evidence", "Writing the verdict"];
+
+// option-j checklist loader — a visual cadence over the real stream (settles when the verdict arrives).
+function AzLoader() {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((p) => Math.min(p + 1, AZ_STEPS.length - 1)), 520);
+    return () => clearInterval(t);
+  }, []);
   return (
-    <span
-      className="inline-block w-2 h-2 rounded-full animate-pulse"
-      style={{ background: "var(--accent)" }}
-    />
+    <div className="azload" aria-live="polite">
+      <div className="az-spinner" aria-hidden />
+      <div className="az-steps">
+        {AZ_STEPS.map((s, n) => (
+          <div className={`az-step${n <= i ? " on" : ""}`} key={n}><span className="ad" /> {s}</div>
+        ))}
+      </div>
+      <div className="az-bar"><i style={{ width: `${(Math.min(i + 1, AZ_STEPS.length) / AZ_STEPS.length) * 100}%` }} /></div>
+    </div>
   );
 }
 
@@ -34,15 +46,12 @@ function AnalyzePageInner() {
   const prefilledUrl = searchParams.get("url") ?? "";
 
   const [profile, setProfile] = useState<UnifiedProfile | null>(null);
-  const [tab, setTab] = useState<Tab>("url");
-  const [url, setUrl] = useState(prefilledUrl);
-  const [text, setText] = useState("");
+  const [box, setBox] = useState(prefilledUrl);
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [roadmapDone, setRoadmapDone] = useState(false);
   const [projectDone, setProjectDone] = useState(false);
-  const [showBreakdown, setShowBreakdown] = useState(false);
   const autoSubmittedRef = useRef(false);
 
   // Auth gate: standalone analyzer = "one free, then sign in". Anonymous users get one run;
@@ -50,9 +59,9 @@ function AnalyzePageInner() {
   const { session, authRequired, loading: authLoading, signInWithOtp } = useAuth();
   const mustGate = authRequired && !session && !authLoading && hasUsedFreeAnalysis();
 
-  // On mount: pick up the profile from the most recent saved run.
+  // On mount: pick up the profile from the active run (the one being viewed this tab).
   useEffect(() => {
-    const id = latestRunId();
+    const id = activeRunId();
     setProfile(id ? getRun(id)?.profile ?? null : null);
   }, []);
 
@@ -60,19 +69,14 @@ function AnalyzePageInner() {
     async (input: { job_url?: string; job_text?: string }) => {
       if (!profile) return;
       // Hard gate (defense-in-depth): an anonymous user who already used their free run must
-      // NEVER fire a request — even if the cosmetic `mustGate` hasn't settled yet (auth still
-      // resolving) or a submit was triggered before it did. Read the flag synchronously here so
-      // the gate enforces the *action*, not just the render. (Was presentational-only: the
-      // ?url= auto-submit slipped through during the authLoading window and ran behind the gate.)
+      // NEVER fire a request — even if `mustGate` hasn't settled (auth still resolving).
       if (authRequired && !session && hasUsedFreeAnalysis()) return;
-      // An anonymous run consumes the one free analysis (gates the next one).
       if (authRequired && !session) markFreeAnalysisUsed();
       setStatus("loading");
       setErrorMsg("");
       setResult(null);
       setRoadmapDone(false);
       setProjectDone(false);
-      setShowBreakdown(false);
 
       const analysisId = Date.now().toString(36);
       let acc: AnalysisResponse | null = null;
@@ -80,8 +84,6 @@ function AnalyzePageInner() {
       try {
         for await (const env of analyzeJobStream(profile, input)) {
           if (env.phase === "verdict") {
-            // Everything available right after matching — roadmap/project are optional
-            // on AnalysisResponse, so this is already a valid (partial) object to render.
             acc = {
               fit_score: env.fit_score ?? 0,
               category_scores: env.category_scores ?? {},
@@ -94,11 +96,7 @@ function AnalyzePageInner() {
             setStatus("streaming");
           } else if (env.phase === "roadmap") {
             if (!acc) continue;
-            const merged: AnalysisResponse = {
-              ...acc,
-              roadmap: env.roadmap ?? null,
-              roadmap_note: env.roadmap_note ?? null,
-            };
+            const merged: AnalysisResponse = { ...acc, roadmap: env.roadmap ?? null, roadmap_note: env.roadmap_note ?? null };
             acc = merged;
             setResult(merged);
             setRoadmapDone(true);
@@ -124,7 +122,6 @@ function AnalyzePageInner() {
             return;
           }
         }
-        // Stream ended without an explicit error — settle to done if a verdict arrived.
         setStatus((s) => (s === "streaming" ? "done" : s === "loading" ? "error" : s));
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
@@ -134,230 +131,139 @@ function AnalyzePageInner() {
     [profile, authRequired, session],
   );
 
-  // Auto-submit when arriving with ?url=... once the profile AND auth have resolved (unless
-  // gated). The `!authLoading` guard is critical: `mustGate` is forced false while auth is
-  // loading, so without it the auto-submit would fire behind the not-yet-engaged gate. (If a
-  // gated user later signs in, this effect re-runs as mustGate flips false and the prefilled
-  // analysis auto-runs then — autoSubmittedRef keeps it one-shot.)
+  // Auto-submit when arriving with ?url=... once profile AND auth have resolved (unless gated).
   useEffect(() => {
     if (!profile || !prefilledUrl || autoSubmittedRef.current || authLoading || mustGate) return;
     autoSubmittedRef.current = true;
-    setTab("url");
     runAnalysis({ job_url: prefilledUrl });
   }, [profile, prefilledUrl, runAnalysis, mustGate, authLoading]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    // Block while auth is still resolving — mustGate is unreliable until then (see runAnalysis).
     if (!profile || authLoading || mustGate) return;
-    const input = tab === "url" ? { job_url: url.trim() } : { job_text: text.trim() };
-    if (!input.job_url && !input.job_text) return;
+    const v = box.trim();
+    if (!v) return;
+    // Single box accepts a URL or pasted text (option-j UX): route by whether it looks like a URL.
+    const input = /^https?:\/\//i.test(v) ? { job_url: v } : { job_text: v };
     void runAnalysis(input);
+  }
+
+  function submitSample(text: string) {
+    setBox(text);
+    void runAnalysis({ job_text: text });
   }
 
   function reset() {
     setStatus("idle");
     setResult(null);
     setErrorMsg("");
-    setShowBreakdown(false);
+    setBox("");
   }
 
   const loading = status === "loading";
-  const busy = status === "loading" || status === "streaming";
   const showResults = result !== null && (status === "streaming" || status === "done");
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-6 py-20">
-      <div className="w-full max-w-xl flex flex-col gap-10">
-
-        {/* Header */}
+    <AppShell active="analyzer">
+      <div className="topbar">
         <div>
-          <Link
-            href="/"
-            className="mono text-xs hover:opacity-70 transition-opacity"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            ← back to profile
-          </Link>
-          <h1 className="mono text-4xl font-semibold tracking-tight mt-4 mb-2" style={{ color: "var(--text-primary)" }}>
-            analyze a job
-          </h1>
-          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-            Paste a job description or URL. Get a fit score, matched evidence, and a clear verdict.
-          </p>
+          <h1 className="pg">Job fit analyzer</h1>
+          <p className="pg-sub">Paste any posting · get a verdict, a gap map, and a plan</p>
         </div>
-
-        {/* No profile state */}
-        {!profile && (
-          <div
-            className="border p-5 flex flex-col gap-3"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-          >
-            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-              No profile found in this session.
-            </p>
-            <Link href="/" className="mono text-sm font-medium" style={{ color: "var(--accent)" }}>
-              run your profile first →
-            </Link>
-          </div>
-        )}
-
-        {/* Profile badge — hidden once results are showing to keep focus on the verdict */}
-        {profile && !showResults && (
-          <div
-            className="flex items-center gap-3 border px-4 py-3"
-            style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-          >
-            <span
-              className="mono text-xs px-1.5 py-0.5 border shrink-0"
-              style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
-            >
-              profile
-            </span>
-            <span className="text-sm truncate" style={{ color: "var(--text-primary)" }}>
-              {profile.full_name}
-              {profile.headline && (
-                <span style={{ color: "var(--text-secondary)" }}> · {profile.headline}</span>
-              )}
-            </span>
-          </div>
-        )}
-
-        {/* Auth still resolving — hold the form/gate so nothing can be submitted into the
-            race window (the bug: a click/auto-submit here ran behind a not-yet-engaged gate). */}
-        {profile && !showResults && authLoading && (
-          <div className="flex items-center gap-2 mono text-xs" style={{ color: "var(--text-secondary)" }}>
-            <Pulse /> loading…
-          </div>
-        )}
-
-        {/* Sign-in gate — shown when the one free analysis has been used (anonymous) */}
-        {profile && !showResults && mustGate && (
-          <SignInGate
-            onSubmit={signInWithOtp}
-            title="Sign in to keep analyzing"
-            subtitle="You've used your free analysis. Sign in (one-tap magic link) to run more."
-          />
-        )}
-
-        {/* Form — only shown when no results are in view, auth has resolved, and not gated */}
-        {profile && !showResults && !authLoading && !mustGate && (
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            {/* Tab switcher */}
-            <div className="flex border-b" style={{ borderColor: "var(--border)" }}>
-              {(["url", "paste"] as Tab[]).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => { setTab(t); setErrorMsg(""); setStatus("idle"); }}
-                  className="mono px-4 py-2 text-xs uppercase tracking-widest transition-colors"
-                  style={{
-                    color: tab === t ? "var(--accent)" : "var(--text-secondary)",
-                    borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
-                    marginBottom: "-1px",
-                  }}
-                >
-                  {t === "url" ? "Job URL" : "Paste JD"}
-                </button>
-              ))}
-            </div>
-
-            {tab === "url" ? (
-              <input
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://jobs.lever.co/..."
-                disabled={loading}
-                className="w-full bg-[var(--surface)] border border-[var(--border)] px-4 py-3 text-sm outline-none
-                           placeholder:text-[var(--text-secondary)] focus:border-[var(--accent)]
-                           transition-colors disabled:opacity-50"
-              />
-            ) : (
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Paste the full job description here..."
-                disabled={loading}
-                rows={10}
-                className="w-full bg-[var(--surface)] border border-[var(--border)] px-4 py-3 text-sm outline-none
-                           placeholder:text-[var(--text-secondary)] focus:border-[var(--accent)]
-                           transition-colors disabled:opacity-50 resize-none"
-              />
-            )}
-
-            <button
-              type="submit"
-              disabled={loading || (tab === "url" ? !url.trim() : !text.trim())}
-              className="mono px-5 py-3 text-sm font-medium border border-[var(--border)] bg-[var(--surface)]
-                         hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)]
-                         transition-colors disabled:opacity-50"
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <Pulse />
-                  analyzing fit...
-                </span>
-              ) : (
-                "analyze fit →"
-              )}
-            </button>
-          </form>
-        )}
-
-        {/* Results — render progressively as the stream fills in */}
-        {showResults && result && (
-          <div className="flex flex-col gap-6">
-            {/* Phase progress strip — honest per-phase status */}
-            <div className="mono text-xs flex items-center gap-4" style={{ color: "var(--text-secondary)" }}>
-              <span style={{ color: "var(--accent)" }}>✓ verdict</span>
-              <span className="flex items-center gap-1.5">
-                {roadmapDone ? <span style={{ color: "var(--accent)" }}>✓</span> : <Pulse />} roadmap
-              </span>
-              <span className="flex items-center gap-1.5">
-                {projectDone ? <span style={{ color: "var(--accent)" }}>✓</span> : <Pulse />} project
-              </span>
-            </div>
-
-            {showBreakdown ? (
-              <BreakdownView data={result} onBack={() => setShowBreakdown(false)} />
-            ) : (
-              <VerdictCard data={result} onShowBreakdown={() => setShowBreakdown(true)} />
-            )}
-
-            {/* New analysis */}
-            <button
-              type="button"
-              onClick={reset}
-              className="mono text-xs self-start hover:opacity-70 transition-opacity"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              ← analyze another job
-            </button>
-          </div>
-        )}
-
-        {/* Error */}
-        {status === "error" && errorMsg && (
-          <div className="border p-4 text-sm" style={{ borderColor: "#7f1d1d", color: "#ff6b6b" }}>
-            {errorMsg}
-          </div>
-        )}
-
       </div>
-    </main>
+
+      {showResults && result ? (
+        <div style={{ paddingTop: 8 }}>
+          <AnalysisView data={result} roadmapDone={roadmapDone} projectDone={projectDone} />
+          <div className="acol" style={{ margin: "0 auto" }}>
+            <div className="bottom-strip">
+              <button type="button" onClick={reset} className="btn btn-ghost">← Analyze another job</button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="azwrap">
+          <div className="az-ico" aria-hidden>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+            </svg>
+          </div>
+          <h1>Analyze any <span className="em-warm">job posting</span>.</h1>
+          <p className="sub">Paste a link or the full description. We grade your fit, map the gaps, and build a plan to close them.</p>
+
+          {!profile && (
+            <div className="azcard" style={{ textAlign: "center" }}>
+              <p style={{ color: "var(--muted)" }}>No profile found in this session.</p>
+              <Link href="/" style={{ color: "var(--ember-soft)", fontFamily: "var(--mono)", fontSize: 13.5 }}>Run your profile first →</Link>
+            </div>
+          )}
+
+          {profile && authLoading && (
+            <div className="azcard"><div className="azload"><div className="az-spinner" /></div></div>
+          )}
+
+          {profile && !authLoading && mustGate && (
+            <div style={{ marginTop: 18 }}>
+              <SignInGate
+                onSubmit={signInWithOtp}
+                title="Sign in to keep analyzing"
+                subtitle="You've used your free analysis. Sign in (one-tap magic link) to run more."
+              />
+            </div>
+          )}
+
+          {profile && !authLoading && !mustGate && (
+            <>
+              <div className="azcard">
+                {loading ? (
+                  <AzLoader />
+                ) : (
+                  <form onSubmit={handleSubmit}>
+                    <label htmlFor="azbox">Job URL or pasted description</label>
+                    <textarea
+                      id="azbox"
+                      className="azbox"
+                      value={box}
+                      onChange={(e) => setBox(e.target.value)}
+                      placeholder="https://stripe.com/jobs/... or paste the full posting text here"
+                    />
+                    <div className="az-actions">
+                      <button type="submit" className="btn btn-primary" style={{ "--bh": "46px", fontSize: 14.5 } as React.CSSProperties} disabled={!box.trim()}>
+                        Analyze fit <span className="arrow">→</span>
+                      </button>
+                      <span className="az-meta">graded against {profile.full_name}&rsquo;s profile</span>
+                    </div>
+                    {status === "error" && errorMsg && (
+                      <div className="az-meta" style={{ color: "var(--danger)", marginTop: 12 }}>{errorMsg}</div>
+                    )}
+                  </form>
+                )}
+              </div>
+
+              <div className="az-samples">
+                <div className="ll">Or try a recent posting</div>
+                <div className="sample-row">
+                  <button type="button" className="sample-chip" onClick={() => submitSample("Ramp · Software Engineer Intern")}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                    Ramp · Software Engineer Intern
+                  </button>
+                  <button type="button" className="sample-chip" onClick={() => submitSample("NVIDIA · Systems Software Intern")}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                    NVIDIA · Systems Software Intern
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </AppShell>
   );
 }
 
 export default function AnalyzePage() {
   return (
-    <Suspense
-      fallback={
-        <main className="min-h-screen flex items-center justify-center">
-          <Pulse />
-        </main>
-      }
-    >
+    <Suspense fallback={<main style={{ minHeight: "60vh", display: "grid", placeItems: "center" }}><span className="az-spinner" /></main>}>
       <AnalyzePageInner />
     </Suspense>
   );

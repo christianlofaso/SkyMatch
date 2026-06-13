@@ -73,6 +73,14 @@ export const InternshipSchema = z.object({
   application_url: z.string().nullable(),
   bucket: z.enum(["local", "big_tech", "startup", "reach"]),
   reach_gap: z.string().nullable(),
+  // Company logo URL from the backend (lib/logos); null → render the letter avatar fallback.
+  // Not yet rendered — consumed when the demo's logo-box card design is ported into the app.
+  logo_url: z.string().nullish(),
+  // Drawer fact-grid fields, extracted at ingestion parse; null when the listing doesn't state
+  // them (the drawer then shows the company name alone / falls back to a heuristic term).
+  company_size: z.string().nullish(), // headcount phrase, e.g. "650 people"
+  term: z.string().nullish(),         // e.g. "Summer 2026" | "Full-time" | "Co-op"
+  posted_at: z.string().nullish(),    // posted date captured at ingestion (snippet/SPA render)
 });
 
 export const InternshipBucketsSchema = z.object({
@@ -195,6 +203,9 @@ export const AnnotateEnvelopeSchema = z.object({
   index: z.number().int(),
   status: z.enum(["ok", "error"]),
   fit_explanation: z.string().optional(),
+  why: z.array(z.string()).default([]),    // "why you fit" bullets (drawer)
+  have: z.array(z.string()).default([]),   // skills the student already brings
+  need: z.array(z.string()).default([]),   // skills to shore up
   reach_gap: z.string().nullable().optional(),
   error: z
     .object({

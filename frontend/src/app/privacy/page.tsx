@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — Pathfinder",
+  title: "Privacy Policy — Skymatch",
 };
 
 // NOTE (M10): TEMPLATE scaffold — structure + the actual data practices are filled in, but

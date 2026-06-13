@@ -3,7 +3,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase, authConfigured, authRequired } from "@/lib/supabase";
-import { SignInGate } from "@/components/SignInGate";
 import { TurnstileWidget } from "@/components/TurnstileWidget";
 
 interface AuthState {
@@ -86,68 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={value}>
       {children}
-      {configured && <AuthChip />}
       {/* Invisible Turnstile widget (no-ops without a site key) — feeds gated API requests. */}
       <TurnstileWidget />
     </AuthContext.Provider>
-  );
-}
-
-/** Minimal fixed top-right control: "Sign in" (popover) when logged out, email + sign-out when in. */
-function AuthChip() {
-  const { session, user, loading, signInWithOtp, signOut } = useAuth();
-  const [open, setOpen] = useState(false);
-
-  if (loading) return null;
-
-  return (
-    <div className="fixed top-3 right-3 z-50 flex flex-col items-end gap-2">
-      {session ? (
-        <div
-          className="mono text-[10px] flex items-center gap-2 border px-2 py-1"
-          style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--text-secondary)" }}
-        >
-          <span className="truncate max-w-[160px]" style={{ color: "var(--text-primary)" }}>
-            {user?.email ?? "signed in"}
-          </span>
-          <a
-            href="/account"
-            className="uppercase tracking-widest hover:opacity-70"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            account
-          </a>
-          <button
-            type="button"
-            onClick={() => signOut()}
-            className="uppercase tracking-widest hover:opacity-70"
-            style={{ color: "var(--accent)" }}
-          >
-            sign out
-          </button>
-        </div>
-      ) : (
-        <>
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            className="mono text-[10px] uppercase tracking-widest border px-3 py-1.5 hover:opacity-80"
-            style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--accent)" }}
-          >
-            sign in
-          </button>
-          {open && (
-            <div className="w-72">
-              <SignInGate
-                onSubmit={signInWithOtp}
-                compact
-                title="Sign in"
-                subtitle="We'll email you a one-tap magic link."
-              />
-            </div>
-          )}
-        </>
-      )}
-    </div>
   );
 }

@@ -4,19 +4,19 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import type { AnalysisResponse } from "@/types/pathfinder";
-import VerdictCard from "@/components/VerdictCard";
-import BreakdownView from "@/components/BreakdownView";
-import { getAnalysis, latestRunId } from "@/lib/storage";
+import AnalysisView from "@/components/AnalysisView";
+import { getAnalysis, activeRunId } from "@/lib/storage";
+import { DEMO_RUN_ID } from "@/lib/demoRun";
 
 export default function AnalysisResultPage() {
   const { analysisId } = useParams<{ analysisId: string }>();
   const [data, setData] = useState<AnalysisResponse | null>(null);
   const [error, setError] = useState("");
-  const [showBreakdown, setShowBreakdown] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
 
   useEffect(() => {
-    setRunId(latestRunId());
+    // Canned demo analyses (`demo-*`) belong to the sample run — send "Back to results" there.
+    setRunId(analysisId?.startsWith("demo-") ? DEMO_RUN_ID : activeRunId());
     if (!analysisId) return;
     const analysis = getAnalysis(analysisId);
     if (!analysis) {
@@ -28,72 +28,34 @@ export default function AnalysisResultPage() {
 
   if (error) {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center px-6 py-20">
-        <div className="w-full max-w-xl flex flex-col gap-6">
-          <p className="text-sm" style={{ color: "#ff6b6b" }}>{error}</p>
-          <Link
-            href="/analyze"
-            className="mono text-sm"
-            style={{ color: "var(--accent)" }}
-          >
-            ← new analysis
-          </Link>
-        </div>
+      <main className="wrap" style={{ paddingTop: 60 }}>
+        <p style={{ color: "var(--danger)" }}>{error}</p>
+        <Link href="/analyze" style={{ color: "var(--ember-soft)", fontFamily: "var(--mono)", fontSize: 13 }}>← New analysis</Link>
       </main>
     );
   }
 
   if (!data) {
     return (
-      <main className="min-h-screen flex items-center justify-center">
-        <span
-          className="inline-block w-2 h-2 rounded-full animate-pulse"
-          style={{ background: "var(--accent)" }}
-        />
+      <main style={{ minHeight: "60vh", display: "grid", placeItems: "center" }}>
+        <span className="az-spinner" />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center px-6 py-20">
-      <div className="w-full max-w-xl flex flex-col gap-8">
+    <main className="wrap" style={{ paddingBottom: 80 }}>
+      <div className="bg-fx"><div className="mesh" /><div className="topo" /></div>
 
+      <div className="acol" style={{ margin: "0 auto", paddingTop: 24 }}>
         {/* Nav */}
-        <div className="flex items-center gap-3 flex-wrap">
-          {runId && (
-            <Link
-              href={`/results/${runId}`}
-              className="mono text-xs font-medium px-3 py-1.5 border border-[var(--border)]
-                         hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)]
-                         transition-colors"
-              style={{ color: "var(--accent)" }}
-            >
-              ← back to results
-            </Link>
-          )}
-          <Link
-            href="/analyze"
-            className="mono text-xs hover:opacity-70 transition-opacity"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            new analysis
-          </Link>
-          <Link
-            href="/"
-            className="mono text-xs hover:opacity-70 transition-opacity"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            start over
-          </Link>
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 18 }}>
+          {runId && <Link href={`/results/${runId}`} className="signin" style={{ paddingLeft: 0 }}>← Back to results</Link>}
+          <Link href="/analyze" className="signin" style={{ paddingLeft: 0 }}>New analysis</Link>
+          <Link href="/" className="signin" style={{ paddingLeft: 0 }}>Start over</Link>
         </div>
 
-        {/* Verdict or breakdown */}
-        {showBreakdown ? (
-          <BreakdownView data={data} onBack={() => setShowBreakdown(false)} />
-        ) : (
-          <VerdictCard data={data} onShowBreakdown={() => setShowBreakdown(true)} />
-        )}
-
+        <AnalysisView data={data} />
       </div>
     </main>
   );

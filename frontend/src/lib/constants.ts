@@ -10,8 +10,8 @@ export const VERDICT_LABEL = {
 } as const;
 
 export const VERDICT_COLOR = {
-  apply_now: "var(--accent)",            // green
-  apply_after_prep: "#f59e0b",           // amber
+  apply_now: "var(--accent)",            // brand accent
+  apply_after_prep: "var(--warn)",       // amber (theme-tokenized for light/dark)
   skip: "var(--text-secondary)",         // muted
 } as const;
 
@@ -20,6 +20,6 @@ export type VerdictCall = keyof typeof VERDICT_LABEL;
 /** Heuristic fit-score color, shared between cards and the full view. */
 export function scoreColor(score: number): string {
   if (score >= 70) return "var(--accent)";
-  if (score >= 40) return "#f59e0b";
-  return "#ff6b6b";
+  if (score >= 40) return "var(--warn)";
+  return "var(--danger)";
 }

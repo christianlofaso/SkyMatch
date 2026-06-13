@@ -26,7 +26,7 @@ import {
   type RunResponse,
   type AnalysisResponse,
 } from "@/types/pathfinder";
-import type { CardAnalysisState, CardAnnotationState } from "@/components/InternshipCard";
+import type { CardAnalysisState, CardAnnotationState } from "@/lib/cardState";
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 const MAX_RUNS = 10;       // history cap (decided with user)
@@ -120,8 +120,15 @@ function decodeSavedAt(runId: string): number {
 
 // ── Public: runs ────────────────────────────────────────────────────────────
 
+/** Write ONLY a run's payload (`pf:run:{id}`), without touching the history index.
+ *  Used to seed the static demo run so it renders on /results/{id} but never appears
+ *  in the user's "previous runs" history. */
+export function saveRunPayloadOnly(runId: string, result: RunResponse): boolean {
+  return safeWrite(runKey(runId), JSON.stringify(result));
+}
+
 export function saveRun(runId: string, result: RunResponse): void {
-  if (!safeWrite(runKey(runId), JSON.stringify(result))) return;
+  if (!saveRunPayloadOnly(runId, result)) return;
 
   const p = result.profile;
   const entry: RunIndexEntry = {
@@ -166,6 +173,24 @@ export function latestRunId(): string | null {
   return readRunIndex()[0]?.runId ?? null;
 }
 
+// ── Active run (per-tab "current run" context) ─────────────────────────────────
+// Which run the app-shell nav ("Matches", Profile sidebar) should point at — the run the user
+// is actually viewing, which may be the static demo (kept OUT of the history index, so
+// latestRunId() would otherwise send "Matches" to a stale real run). sessionStorage so it
+// survives in-tab navigation (Profile → Matches) but resets per tab.
+const ACTIVE_RUN_KEY = "pf:active_run";
+
+export function setActiveRunId(runId: string): void {
+  if (typeof window === "undefined") return;
+  try { window.sessionStorage.setItem(ACTIVE_RUN_KEY, runId); } catch { /* private mode / quota */ }
+}
+
+/** The run the shell should treat as current: the in-tab active run, else the newest stored run. */
+export function activeRunId(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.sessionStorage.getItem(ACTIVE_RUN_KEY) ?? latestRunId(); } catch { return latestRunId(); }
+}
+
 // ── Public: per-run card analyses (moved from results/[id]/page.tsx) ──────────
 
 export type BucketKey = "local" | "big_tech" | "startup" | "reach";
@@ -208,11 +233,18 @@ export function saveAnalyses(runId: string, analyses: AnalysesByBucket): void {
 
 export type AnnotationsByBucket = Record<BucketKey, Record<number, CardAnnotationState>>;
 
-const CardAnnotationStateSchema: z.ZodType<CardAnnotationState> = z.discriminatedUnion("status", [
+// No explicit z.ZodType<CardAnnotationState> annotation: the .default([]) fields make the schema's
+// INPUT type diverge from its OUTPUT (why/have/need optional-in, required-out), which a single
+// ZodType<T> annotation can't express. The inferred OUTPUT still matches CardAnnotationState.
+const CardAnnotationStateSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("loading") }),
   z.object({
     status: z.literal("ok"),
     fit_explanation: z.string(),
+    // Default [] so annotations persisted before the why/have/need enrichment still parse.
+    why: z.array(z.string()).default([]),
+    have: z.array(z.string()).default([]),
+    need: z.array(z.string()).default([]),
     reach_gap: z.string().nullable(),
   }),
   z.object({ status: z.literal("error") }),
@@ -258,6 +290,13 @@ function readAnalysisIds(): string[] {
   } catch {
     return [];
   }
+}
+
+/** Write ONLY an analysis payload (`pf:analysis:{id}`), without touching the capped id index.
+ *  Used to seed the static demo's per-role canned analyses so they're retrievable by
+ *  getAnalysis() but never evict the user's real standalone analyses. */
+export function saveAnalysisPayloadOnly(analysisId: string, data: AnalysisResponse): boolean {
+  return safeWrite(analysisKey(analysisId), JSON.stringify(data));
 }
 
 export function saveAnalysis(analysisId: string, data: AnalysisResponse): void {

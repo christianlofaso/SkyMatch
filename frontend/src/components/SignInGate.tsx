@@ -38,41 +38,23 @@ export function SignInGate({ onSubmit, title, subtitle, compact }: Props) {
     }
   }
 
-  const pad = compact ? "p-4" : "p-5";
+  const cardCls = `signin-card${compact ? " compact" : ""}`;
 
   if (state === "sent") {
     return (
-      <div
-        className={`border ${pad} flex flex-col gap-2`}
-        style={{ borderColor: "var(--accent)", background: "var(--surface)" }}
-      >
-        <p className="mono text-xs uppercase tracking-widest" style={{ color: "var(--accent)" }}>
-          Check your email
-        </p>
-        <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-          We sent a magic link to <span style={{ color: "var(--text-primary)" }}>{email}</span>.
-          Open it on this device to continue.
+      <div className={cardCls}>
+        <p className="signin-title accent">Check your email</p>
+        <p className="signin-sub">
+          We sent a magic link to <b>{email}</b>. Open it on this device to continue.
         </p>
       </div>
     );
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className={`border ${pad} flex flex-col gap-3`}
-      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-    >
-      {title && (
-        <p className="mono text-xs uppercase tracking-widest" style={{ color: "var(--accent)" }}>
-          {title}
-        </p>
-      )}
-      {subtitle && (
-        <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-          {subtitle}
-        </p>
-      )}
+    <form onSubmit={submit} className={cardCls}>
+      {title && <p className="signin-title">{title}</p>}
+      {subtitle && <p className="signin-sub">{subtitle}</p>}
       <input
         type="email"
         required
@@ -80,24 +62,12 @@ export function SignInGate({ onSubmit, title, subtitle, compact }: Props) {
         onChange={(e) => setEmail(e.target.value)}
         placeholder="you@email.com"
         disabled={state === "sending"}
-        className="w-full bg-[var(--bg)] border border-[var(--border)] px-3 py-2 text-sm outline-none
-                   placeholder:text-[var(--text-secondary)] focus:border-[var(--accent)]
-                   transition-colors disabled:opacity-50"
+        className="signin-input"
       />
-      <button
-        type="submit"
-        disabled={state === "sending" || !email.trim()}
-        className="mono px-4 py-2 text-xs uppercase tracking-widest font-medium border border-[var(--border)]
-                   bg-[var(--surface)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)]
-                   transition-colors disabled:opacity-50"
-      >
-        {state === "sending" ? "sending…" : "send magic link"}
+      <button type="submit" disabled={state === "sending" || !email.trim()} className="signin-submit">
+        {state === "sending" ? "Sending…" : "Send magic link"}
       </button>
-      {state === "error" && error && (
-        <p className="text-xs" style={{ color: "#ff6b6b" }}>
-          {error}
-        </p>
-      )}
+      {state === "error" && error && <p className="signin-error">{error}</p>}
     </form>
   );
 }

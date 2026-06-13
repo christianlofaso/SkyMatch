@@ -1,39 +1,48 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import { SiteFooter } from "@/components/SiteFooter";
 
 export const metadata: Metadata = {
-  title: "Pathfinder",
-  description: "LinkedIn discovery: internships tailored to you.",
+  metadataBase: new URL("https://skymatch.ai"),
+  title: "SkyMatch",
+  description: "Paste your profile, get internships matched to your real experience — banded by how ready you are.",
+  openGraph: {
+    title: "SkyMatch",
+    description: "Internships matched to your real experience.",
+    url: "https://skymatch.ai",
+    siteName: "SkyMatch",
+  },
 };
+
+/** SkyMatch webfonts (option-j look): Fraunces (display) + General Sans (body) + Spline Sans Mono. */
+function FontLinks() {
+  return (
+    <>
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+      <link
+        href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600&display=swap"
+        rel="stylesheet"
+      />
+      <link
+        href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500;1,9..144,600&family=Spline+Sans+Mono:wght@400;500&display=swap"
+        rel="stylesheet"
+      />
+    </>
+  );
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap"
-          rel="stylesheet"
-        />
+        <FontLinks />
       </head>
       <body>
         <AuthProvider>{children}</AuthProvider>
         <SiteFooter />
       </body>
     </html>
-  );
-}
-
-function SiteFooter() {
-  return (
-    <footer
-      className="mono text-[10px] uppercase tracking-widest flex justify-center gap-5 py-6"
-      style={{ color: "var(--text-secondary)" }}
-    >
-      <Link href="/privacy" className="hover:opacity-70">Privacy</Link>
-      <Link href="/terms" className="hover:opacity-70">Terms</Link>
-      <Link href="/account" className="hover:opacity-70">Account</Link>
-    </footer>
   );
 }
