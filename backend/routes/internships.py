@@ -92,10 +92,11 @@ def _annotate_fit_system(bucket: str, city: str | None = None) -> str:
                         'stretch-but-plausible target.')
     else:
         gap_rule = '- reach_gap: always null.'
-        skip_rule = (
-            'If this listing clearly indicates a full-time role or a closed/filled position, '
-            'respond with exactly: null'
-        )
+        # No skip-to-null rule for the national buckets: non-internships are already removed at
+        # ingestion (is_internship + the serve pre-filter), so a served role is always valid —
+        # re-litigating "is this full-time?" here only false-declines real interns (blanking
+        # their "why you fit"). reach keeps its off-field/closed rule (those are aspirational).
+        skip_rule = ''
         bucket_intro = ''
     near = (f' This role is already verified to be in or near {city}.'
             if (bucket == "local" and city) else '')
