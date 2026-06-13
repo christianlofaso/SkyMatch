@@ -16,7 +16,9 @@ import httpx
 # ── Env config ────────────────────────────────────────────────────────────────
 API_KEY    = os.getenv("FIRECRAWL_API_KEY", "")
 BASE_URL   = os.getenv("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev").rstrip("/")
-WAIT_MS    = int(os.getenv("FIRECRAWL_WAIT_MS",    "5000"))    # JS render wait
+WAIT_MS    = int(os.getenv("FIRECRAWL_WAIT_MS",    "8000"))    # JS render wait (bumped from 5000
+# so SPA boards like Wellfound finish rendering the posted-date / lazy content before we scrape;
+# TIMEOUT_MS below comfortably covers it. Env-overridable.
 TIMEOUT_MS = int(os.getenv("FIRECRAWL_TIMEOUT_MS", "90000"))   # total request budget
 # NOTE: this is a SINGLE budget covering BOTH the page fetch (~10s) AND the LLM
 # schema-extraction step (the "extract"/json format), which alone can run ~30s+ on
@@ -47,6 +49,7 @@ JOB_SCHEMA = {
         "company_name":    {"type": "string", "description": "Hiring company name"},
         "location":        {"type": "string", "description": "Job location or 'Remote'"},
         "employment_type": {"type": "string", "description": "e.g. Internship, Full-time, Part-time"},
+        "date_posted":     {"type": "string", "description": "When the job was posted, as shown (e.g. 'Posted 3 days ago', '1 month ago', 'Jan 5, 2026'); empty if not shown"},
         "description":     {"type": "string", "description": "Full job description body text"},
         "requirements": {
             "type": "array",

@@ -13,5 +13,8 @@ Respond with ONLY a single JSON object (no array, no markdown, no commentary) wi
 - is_internship: boolean. true if this is an internship / co-op / intern-level role; false if it clearly reads as a full-time, senior, or non-intern position. When genuinely unclear, default to true.
 - requires_phd: boolean. true ONLY if current enrollment in (or completion of) a PhD / doctoral program is a REQUIRED minimum qualification — e.g. "currently pursuing a PhD", "PhD required", "PhD candidates", "enrolled in a PhD program". false when a PhD is merely preferred / "a plus", when the role is open to Bachelor's or Master's students, or when degree level isn't mentioned. Default false when unclear.
 - sponsorship: ONE of "offered" (visa/work sponsorship explicitly available) | "not_offered" (explicitly says no sponsorship / must be authorized to work without sponsorship) | "unknown" (not mentioned — the common case).
+- term: the role's term/season ONLY if the listing states it — e.g. "Summer 2026", "Fall 2025", "Full-time", "Part-time", "Co-op". Empty string "" if not stated. Do not guess a year or season.
+- company_size: the company's approximate employee headcount ONLY if the listing states it — normalize to "<N> people" (e.g. "650 people", "10,000+ people"). Empty string "" if the listing doesn't mention company size. Never estimate or invent a number.
+- posted_at: when the listing was posted, ONLY if the text states it — verbatim as shown (e.g. "Posted 3 days ago", "2 weeks ago", "Jan 5, 2026"). Empty string "" if not stated. Never infer a date.
 
 Base every field ONLY on the provided listing text. Output the JSON object and nothing else.

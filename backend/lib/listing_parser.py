@@ -103,23 +103,41 @@ def needs_firecrawl_company(url: str, company: str | None) -> bool:
     return any(d in host for d in _FIRECRAWL_COMPANY_DOMAINS)
 
 
-async def company_from_firecrawl(url: str) -> tuple[str | None, str | None]:
-    """Render an SPA job page and pull (company, location) from Firecrawl's JOB_SCHEMA
-    extract — the only place the company appears for wellfound/workatastartup listings.
-    Firecrawl 'auto' proxy escalates past Cloudflare (wellfound) server-side when blocked.
-    (None, None) on no key / any failure (caller leaves the row as-is)."""
+# Posted-date recovery from rendered markdown — the structured extract misses date_posted on
+# some renders even when the page shows it ("Posted: 4 weeks ago"). Prefer a "posted … ago"
+# phrase; fall back to a bare "<n> <unit> ago". Group 1 is the clean "<n> <unit> ago" (no prefix).
+_POSTED_AGO_RE = re.compile(
+    r"(?:re)?posted[\s:\-]*?(\d+\+?\s+(?:second|minute|hour|day|week|month|year)s?\s+ago)", re.I)
+_BARE_AGO_RE = re.compile(r"\b(\d+\+?\s+(?:hour|day|week|month|year)s?\s+ago)\b", re.I)
+
+
+def _posted_from_markdown(md: str) -> str | None:
+    m = _POSTED_AGO_RE.search(md) or _BARE_AGO_RE.search(md)
+    return m.group(1).strip() if m else None
+
+
+async def company_from_firecrawl(url: str) -> tuple[str | None, str | None, str | None]:
+    """Render an SPA job page and pull (company, location, posted) from Firecrawl's JOB_SCHEMA
+    extract — the only place these appear for wellfound/workatastartup listings (the posted
+    date is rendered, never in the snippet). Firecrawl 'auto' proxy escalates past Cloudflare
+    (wellfound) server-side when blocked. (None, None, None) on no key / any failure (caller
+    leaves the row as-is)."""
     if not firecrawl.is_available():
-        return None, None
+        return None, None, None
     try:
         data = await firecrawl.scrape(url, "auto")
     except Exception:
-        return None, None
-    ex = ((data.get("data") or {}).get("extract") or {}) if data else {}
-    co = ex.get("company_name")
-    loc = ex.get("location")
-    co = co.strip() if isinstance(co, str) and co.strip() else None
-    loc = loc.strip() if isinstance(loc, str) and loc.strip() else None
-    return co, loc
+        return None, None, None
+    d = (data.get("data") or {}) if data else {}
+    ex = d.get("extract") or {}
+
+    def _clean(v):
+        return v.strip() if isinstance(v, str) and v.strip() else None
+
+    # Posted: structured extract first, else regex the rendered markdown (the extract misses it
+    # on some renders even though the page shows it).
+    posted = _clean(ex.get("date_posted")) or _posted_from_markdown(d.get("markdown") or "")
+    return _clean(ex.get("company_name")), _clean(ex.get("location")), posted
 
 
 def build_embed_text(row: dict) -> str:
@@ -191,6 +209,13 @@ def _normalize_parsed(p: dict, listing: dict) -> dict:
         # additionally backstopped by a "PhD" title check at serve time.
         "requires_phd": requires_phd if isinstance(requires_phd, bool) else False,
         "sponsorship": sponsorship,
+        # Drawer fact-grid display fields — "" when the listing doesn't state them (serving
+        # maps "" → None so the frontend falls back to company name alone / a heuristic term).
+        # posted_at from the snippet here; the Firecrawl SPA render (precompute) fills it for
+        # wellfound/workatastartup rows, whose posted date is only on the rendered page.
+        "term": _as_str(p.get("term")),
+        "company_size": _as_str(p.get("company_size")),
+        "posted_at": _as_str(p.get("posted_at")),
     }
 
 
@@ -207,7 +232,7 @@ def parse_listing_sync(listing: dict) -> dict | None:
     try:
         msg = ai.messages.create(
             model=MODEL_QUICK,
-            max_tokens=300,
+            max_tokens=420,  # bumped from 300 for the added term/company_size/posted_at fields
             temperature=0,  # Haiku accepts sampling params (only Opus 4.8 rejects them)
             system=_PARSE_SYSTEM,
             messages=[{"role": "user", "content": user}],

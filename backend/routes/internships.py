@@ -23,6 +23,7 @@ from lib.anthropic_client import client as ai, sonnet_slot
 from lib.cost import cost_session, record_cache_hit, record_usage
 from lib.jsonparse import parse_json_with_context, strip_fences
 from lib.listing_parser import company_from_url
+from lib.logos import logo_url_for
 from lib.precompute import parse_and_embed_rows
 from lib.timing import timed
 from schemas import (
@@ -106,6 +107,9 @@ def _annotate_fit_system(bucket: str, city: str | None = None) -> str:
 
 You are given the student profile and the listing's ALREADY-EXTRACTED fields (title, company, location, description, skills). Do NOT re-output those fields. Respond with ONLY a single JSON object (no array, no markdown, no commentary) with exactly these fields:
 - fit_explanation: AT MOST 2 short sentences (~30 words total). MUST name a specific profile detail (a skill, major, school, org, or past company) and connect it to this role. Concrete and scannable — not a paragraph.{near}
+- why: an array of 2-3 SHORT bullet strings (each ~12 words, no trailing period) expanding on the fit — each names a concrete profile detail tied to this role. These are the drawer's "why you fit" bullets; do not just restate fit_explanation verbatim.
+- have: an array of the skills (short labels) the student ALREADY demonstrably brings that this role wants — drawn from the listing's skills where they overlap the profile's skills/experience. [] if none clearly overlap.
+- need: an array of the skills (short labels) this posting wants that the profile does NOT yet show — the honest gaps to shore up. Keep it grounded in the listing's skills; [] if the profile covers everything.
 {gap_rule}"""
 
 
@@ -173,13 +177,15 @@ def _annotate_fit_sync(
     profile: ProfileAnalysis, fields: dict, bucket: str, city: str | None = None,
 ) -> dict | None:
     """Slim fit-only Claude call for the DEFERRED annotate pass: given the listing's
-    already-known display fields, write just the per-user fit_explanation (+reach_gap for
-    reach). Returns {"fit_explanation", "reach_gap"} or None when the model declines / errors
-    (the card simply keeps its empty fit text). Called via asyncio.to_thread under sonnet_slot()."""
+    already-known display fields, write the per-user fit text — fit_explanation (collapsed-card
+    one-liner) + why[] bullets + have[]/need[] skill chips (+reach_gap for reach). Returns
+    {"fit_explanation", "why", "have", "need", "reach_gap"} or None when the model declines /
+    errors (the card simply keeps its empty fit text). Called via asyncio.to_thread under
+    sonnet_slot()."""
     try:
         msg = ai.messages.create(
             model=MODEL_MID,
-            max_tokens=160,  # just fit_explanation (+reach_gap); ~2x headroom
+            max_tokens=400,  # fit_explanation + why[]/have[]/need[] (+reach_gap); headroom
             system=_annotate_fit_system(bucket, city),
             messages=[{
                 "role": "user",
@@ -201,13 +207,64 @@ def _annotate_fit_sync(
         fit = out.get("fit_explanation")
         if not isinstance(fit, str) or not fit.strip():
             return None
+
+        def _str_list(v) -> list[str]:
+            if not isinstance(v, list):
+                return []
+            return [s.strip() for s in v if isinstance(s, str) and s.strip()]
+
         return {
             "fit_explanation": fit.strip(),
+            "why": _str_list(out.get("why")),
+            "have": _str_list(out.get("have")),
+            "need": _str_list(out.get("need")),
             "reach_gap": (out.get("reach_gap") if bucket == "reach" else None),
         }
     except Exception as e:
         print(f"[annotate-fit:{bucket}] ERROR: {e}")
         return None
+
+
+_SEASON_FIX = {"autumn": "Fall"}
+_POSTED_PREFIX_RE = re.compile(r"^\s*(?:re)?posted[\s:\-]*", re.I)
+# Model/extract stand-ins for "no date" — Firecrawl sometimes returns "N/A" literally.
+_POSTED_JUNK = {"n/a", "na", "none", "null", "unknown", "-", "—", "not specified", "not available", "tbd"}
+
+
+def _clean_posted(v: str | None) -> str | None:
+    """Strip a leading 'Posted:'/'Reposted' prefix from a captured posted date so the drawer's
+    'Posted' box reads just '4 weeks ago' (not 'Posted: 4 weeks ago'); drop junk placeholders
+    ('N/A', etc.). None when empty/junk."""
+    if not isinstance(v, str):
+        return None
+    cleaned = _POSTED_PREFIX_RE.sub("", v).strip()
+    return cleaned if cleaned and cleaned.lower() not in _POSTED_JUNK else None
+
+
+def _term_from_text(*texts: str | None) -> str | None:
+    """Deterministically recover a role term from RAW listing text (search_title/snippet/title).
+    The Haiku parse strips the season from the cleaned `title` (e.g. "...RF (Fall 2026)" →
+    "...RF"), but it survives in search_title — so serving recovers it here with zero LLM,
+    covering every already-parsed row without a re-parse. Prefers a season+year, then a bare
+    season, then an employment type. None when the text states no term."""
+    hay = " ".join(t for t in texts if t)
+    m = re.search(r"\b(spring|summer|fall|autumn|winter)\b[\s.,'’]*((?:20)?\d{2})\b", hay, re.I)
+    if m:
+        season = _SEASON_FIX.get(m.group(1).lower(), m.group(1).capitalize())
+        yr = m.group(2)
+        return f"{season} {yr if len(yr) == 4 else '20' + yr}"
+    m = re.search(r"\b(spring|summer|fall|autumn|winter)\b", hay, re.I)
+    if m:
+        return _SEASON_FIX.get(m.group(1).lower(), m.group(1).capitalize())
+    if re.search(r"\bco-?op\b", hay, re.I):
+        return "Co-op"
+    if re.search(r"\bpart[-\s]?time\b", hay, re.I):
+        return "Part-time"
+    if re.search(r"\bfull[-\s]?time\b", hay, re.I):
+        return "Full-time"
+    if re.search(r"\bseasonal\b", hay, re.I):
+        return "Seasonal"
+    return None
 
 
 def _build_internship(listing: dict, bucket: str) -> Internship:
@@ -240,6 +297,18 @@ def _build_internship(listing: dict, bucket: str) -> Internship:
         application_url=listing.get("url"),
         bucket=bucket,
         reach_gap=None,
+        logo_url=logo_url_for(company, listing.get("url")),
+        # Drawer fact-grid fields ("" from the parse → None so the frontend treats them as absent).
+        company_size=(parsed.get("company_size") or None),
+        # Term: prefer the parse's value (new rows); else recover deterministically from the raw
+        # search_title/snippet (covers every pre-existing parsed row, whose title was stripped).
+        term=(parsed.get("term") or _term_from_text(
+            parsed.get("title"), listing.get("search_title"), listing.get("snippet"),
+        )),
+        # Posted date captured at ingestion (snippet parse or SPA render); strip a leading
+        # "Posted:" so the box (already labeled "Posted") shows just "4 weeks ago". The drawer
+        # falls back to the per-request fetch's date when this is absent.
+        posted_at=_clean_posted(parsed.get("posted_at")),
     )
 
 
@@ -283,7 +352,7 @@ def _select_and_build(
 # ── Index-serving constants ────────────────────────────────────────────────
 # Don't serve listings the worker hasn't re-validated within this window. Tightened from
 # 72h → 48h (env SERVE_MAX_AGE_HOURS) so served links are fresher; the worker runs ~every
-# 6h, so 48h is an ~8x margin. If the worker LAGS past this, a national bucket could go
+# 8h, so 48h is a ~6x margin. If the worker LAGS past this, a national bucket could go
 # empty — _serve_bucket_rows falls back to _SERVE_MAX_AGE_FALLBACK (env
 # SERVE_MAX_AGE_FALLBACK_HOURS, default 96h) for that bucket rather than show nothing.
 # (Reliability: keep SERVE_MAX_AGE_HOURS comfortably above the real worker cadence.)
@@ -618,9 +687,14 @@ async def _annotate_one(
         cached = await asyncio.to_thread(get_annotate_cache, key)
         if cached is not None:
             record_cache_hit("annotate", MODEL_MID)
+            # .get(..., []) defaults: entries cached before the why/have/need enrichment lack
+            # those keys, so an old hit degrades to empty lists rather than KeyError-ing.
             return AnnotateEnvelope(
                 index=i, status="ok",
                 fit_explanation=cached.get("fit_explanation") or "",
+                why=cached.get("why") or [],
+                have=cached.get("have") or [],
+                need=cached.get("need") or [],
                 reach_gap=cached.get("reach_gap"),
             )
         listing = _to_listings([row])[0]
@@ -630,10 +704,14 @@ async def _annotate_one(
             out = await asyncio.to_thread(_annotate_fit_sync, profile, fields, bucket, city)
         if out:  # cache only a real, non-empty result — declines/errors re-attempt next time
             await asyncio.to_thread(set_annotate_cache, key, out)
+        out = out or {}
         return AnnotateEnvelope(
             index=i, status="ok",
-            fit_explanation=(out or {}).get("fit_explanation") or "",
-            reach_gap=(out or {}).get("reach_gap"),
+            fit_explanation=out.get("fit_explanation") or "",
+            why=out.get("why") or [],
+            have=out.get("have") or [],
+            need=out.get("need") or [],
+            reach_gap=out.get("reach_gap"),
         )
     except Exception as exc:
         print(f"[annotate-route] job[{i}] url={url!r} failed: {exc}")

@@ -62,11 +62,15 @@ async def parse_and_embed_rows(rows: list[dict], *, firecrawl_company: bool = Tr
 
             async def _resolve(r: dict, p: dict) -> None:
                 async with fsem:
-                    co, loc = await company_from_firecrawl(r["url"])
+                    co, loc, posted = await company_from_firecrawl(r["url"])
                 if co:
                     p["company"] = co
                 if loc and (not p.get("location") or p["location"] == "Remote / Various"):
                     p["location"] = loc
+                # The posted date for SPA rows is only on the rendered page — fill it when the
+                # snippet parse didn't already (wellfound/workatastartup hide it behind the app).
+                if posted and not p.get("posted_at"):
+                    p["posted_at"] = posted
 
             async with timed("precompute/parse firecrawl-company"):
                 await asyncio.gather(*[_resolve(r, p) for r, p in spa])

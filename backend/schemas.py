@@ -78,6 +78,12 @@ class Internship(BaseModel):
     application_url: str | None = None
     bucket: Literal["local", "big_tech", "startup", "reach"]
     reach_gap: str | None = None  # only when bucket == "reach"
+    logo_url: str | None = None  # company logo (lib/logos.logo_url_for); None → frontend letter avatar
+    # Drawer fact-grid fields, extracted at ingestion parse (listing_parser); None when the
+    # listing doesn't state them — the frontend then shows the company name alone / a heuristic term.
+    company_size: str | None = None  # headcount phrase, e.g. "650 people" (only if the listing says so)
+    term: str | None = None          # e.g. "Summer 2026" | "Full-time" | "Co-op" (only if stated)
+    posted_at: str | None = None     # when the listing was posted, as captured at ingestion (snippet/SPA render)
 
 
 class InternshipBuckets(BaseModel):
@@ -112,6 +118,9 @@ class AnnotateEnvelope(BaseModel):
     index: int
     status: Literal["ok", "error"]
     fit_explanation: str | None = None
+    why: list[str] = []     # 2-3 short "why you fit" bullets (drawer)
+    have: list[str] = []    # skills the student already brings (⊆ listing skills)
+    need: list[str] = []    # skills the posting wants that the profile lacks
     reach_gap: str | None = None
     error: AnnotateError | None = None
 
