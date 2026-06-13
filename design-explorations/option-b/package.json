@@ -1,0 +1,14 @@
+{
+  "name": "pathfinder-design-option-b",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Frontend design exploration (option B) for Pathfinder — static mockups served on :3002",
+  "scripts": {
+    "serve": "node serve.mjs",
+    "shot": "node screenshot.mjs"
+  },
+  "dependencies": {
+    "puppeteer": "^24.0.0"
+  }
+}

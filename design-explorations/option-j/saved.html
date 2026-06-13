@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Saved roles · SkyMatch</title>
+<meta name="description" content="Your shortlisted SkyMatch roles, ranked by fit." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500;1,9..144,600&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+
+<div class="bg-fx" aria-hidden="true"><div class="mesh"></div><div class="topo"></div></div>
+<div class="grain" aria-hidden="true">
+  <svg xmlns="http://www.w3.org/2000/svg"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF8C5A"/><stop offset="1" stop-color="#FFD27A"/></linearGradient>
+  </defs>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="index.html" aria-label="SkyMatch home">
+      <svg class="mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="15" stroke="url(#warm)" stroke-opacity=".4"/>
+        <path d="M16 3.5c.9 6.2 2.4 9.6 8.5 12.5-6.1 2.9-7.6 6.3-8.5 12.5-.9-6.2-2.4-9.6-8.5-12.5C13.6 13.1 15.1 9.7 16 3.5Z" fill="url(#warm)"/>
+        <circle cx="16" cy="16" r="2.1" fill="#080A0F"/><circle cx="16" cy="16" r="1.1" fill="url(#warm)"/>
+      </svg>
+      <span class="wm">SkyMatch</span>
+    </a>
+    <a class="btn btn-primary newrun" href="index.html">New match run</a>
+    <nav class="snav" aria-label="App">
+      <a class="sitem" href="results.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg>
+        Matches
+      </a>
+      <a class="sitem" href="analyzer.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        Job fit analyzer
+      </a>
+      <a class="sitem on" href="saved.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        Saved <span class="badge" data-saved-count></span>
+      </a>
+      <a class="sitem" href="profile.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Profile
+      </a>
+    </nav>
+    <div class="lastrun">
+      <div class="ll">Last run</div>
+      <b>15 roles</b> matched to your profile. 5 set aside in plain sight.
+      <a href="index.html">Run match again</a>
+    </div>
+    <div class="userchip">
+      <span class="avatar" aria-hidden="true">J</span>
+      <div><b>Jordan Avery</b><span class="sub">Ohio State</span></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <h1 class="pg">Saved roles</h1>
+        <p class="pg-sub" id="saved-sub"></p>
+      </div>
+      <a class="btn btn-ghost" href="#" style="--bh:42px;font-size:14px;padding:0 18px">Export list</a>
+    </div>
+
+    <div class="roles" id="saved-feed" style="margin-top:26px"></div>
+    <div id="saved-empty" hidden style="margin-top:40px;text-align:center">
+      <p style="font-family:var(--display);font-style:italic;font-size:19px;color:var(--muted)">Nothing saved yet.</p>
+      <p style="margin-top:8px;font-size:14px;color:var(--faint)">Tap the bookmark on any match and it will wait for you here.</p>
+      <a class="btn btn-ghost" href="results.html" style="margin-top:20px">Back to matches</a>
+    </div>
+  </div>
+</div>
+
+<script src="demo-data.js"></script>
+<script>
+const sfeed=document.getElementById('saved-feed');
+const sempty=document.getElementById('saved-empty');
+const ssub=document.getElementById('saved-sub');
+let firstRender=true;
+function renderSaved(){
+  const ids=SM.list();
+  const rows=SM_ROLES.filter(r=>ids.includes(r.id)); // keeps band order
+  sfeed.innerHTML=rows.map(smRowHTML).join('');
+  smBindRows(sfeed);
+  smBindSaves(sfeed);
+  sempty.hidden=rows.length>0;
+  ssub.textContent=rows.length?`${rows.length} shortlisted · ranked by fit`:'your shortlist is empty';
+  SM.badge();
+  // staggered entrance on first load only (not on unsave re-renders)
+  if(firstRender){
+    sfeed.classList.add('stagger');
+    [...sfeed.children].forEach((el,i)=>{el.style.animationDelay=(i*45)+'ms';});
+    firstRender=false;
+  }else{
+    sfeed.classList.remove('stagger');
+  }
+}
+window.smOnSaveChange=renderSaved; // unsaving from a row or the drawer updates the list live
+renderSaved();
+const q=new URLSearchParams(location.search);
+if(q.get('open'))SMDrawer.open(q.get('open'));
+</script>
+</body>
+</html>
