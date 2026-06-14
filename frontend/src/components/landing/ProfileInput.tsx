@@ -5,7 +5,7 @@ import { useProfileRun } from "@/lib/useProfileRun";
 import { seedDemoRun, DEMO_RUN_ID } from "@/lib/demoRun";
 import { RunVeil } from "./RunVeil";
 
-// The hero run input, styled as option-j's upload card: a résumé dropzone + a LinkedIn-URL
+// The hero run input, styled as option-j's upload card: a resume dropzone + a LinkedIn-URL
 // pill + "Get matched →". Paste-text is intentionally not surfaced here (the hook/backend
 // still accept it). All behaviour comes from the shared useProfileRun hook; on submit we show
 // the radar run veil, and the hook navigates to /results on completion.
@@ -23,8 +23,8 @@ export function ProfileInput() {
 
   const ready = r.uploadStatus === "done";
   const dzTitle =
-    r.uploadStatus === "uploading" ? "Parsing résumé…"
-      : ready ? (r.file?.name ?? "Résumé added")
+    r.uploadStatus === "uploading" ? "Parsing resume…"
+      : ready ? (r.file?.name ?? "Resume added")
       : r.fileError ? r.fileError
       : "Upload your resume";
   const dzSub =
