@@ -130,11 +130,38 @@ def _is_ats_or_aggregator(host: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in _ATS_AGGREGATOR_HOSTS)
 
 
+# Generic trailing corporate tokens dropped (one at a time, from the right) when an exact
+# curated lookup misses — so "Palantir Technologies" / "Cisco Systems Inc" still hit the map.
+# A stripped candidate is accepted ONLY if it is itself a curated key, so this never mangles a
+# legitimately multi-word entry like "Analog Devices" or "Palo Alto Networks".
+_GENERIC_CORP_TOKENS: frozenset[str] = frozenset({
+    "technologies", "technology", "labs", "inc", "inc.", "corp", "corp.", "corporation",
+    "co", "co.", "llc", "ltd", "ltd.", "limited", "plc", "holdings", "group", "systems",
+    "software", "global",
+})
+
+
 def curated_domain(company: str | None) -> str | None:
     """The curated primary domain for a known company, or None. Exposed for the server-side
     logo resolver (lib/logo_resolver) as the trusted-domain source between the listing-extracted
-    domain and a logo.dev name search."""
-    return _COMPANY_DOMAINS.get((company or "").strip().lower())
+    domain and a logo.dev name search.
+
+    Falls back to dropping trailing generic corporate tokens ("Palantir Technologies" ->
+    "palantir") so the big curated names resolve WITHOUT depending on the logo.dev search key —
+    accepting a shortened form only when it is itself curated, so a multi-word entry like
+    "Analog Devices" is never mangled."""
+    key = (company or "").strip().lower()
+    if not key:
+        return None
+    if key in _COMPANY_DOMAINS:
+        return _COMPANY_DOMAINS[key]
+    tokens = key.split()
+    while len(tokens) > 1 and tokens[-1] in _GENERIC_CORP_TOKENS:
+        tokens = tokens[:-1]
+        cand = " ".join(tokens)
+        if cand in _COMPANY_DOMAINS:
+            return _COMPANY_DOMAINS[cand]
+    return None
 
 
 def logo_url_for(company: str | None, application_url: str | None = None) -> str | None:

@@ -513,6 +513,27 @@ def get_listings_to_embed(limit: int | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_listings_missing_logo(limit: int | None = None) -> list[dict]:
+    """Parsed valid listings whose stored logo_url is null/absent. A transient logo.dev or
+    network failure (or a half-finished deploy that resolved nothing) leaves logo_url null;
+    because the parse pass is incremental (parsed_at already stamped) that null would otherwise
+    FREEZE forever. Lets the worker's logo_backfill_pass re-resolve them WITHOUT re-running
+    Haiku/Voyage — the logo analogue of get_listings_to_embed's 'Voyage-down trap' guard.
+
+    parsed_json is TEXT written by json.dumps (default separators), so a null value serializes
+    exactly as `"logo_url": null`; the LIKE keys off that. The NOT-LIKE arm also catches any
+    older row that predates the logo_url key entirely."""
+    sql = ("SELECT niche_key, bucket, url, parsed_json FROM listing_store "
+           "WHERE status='valid' AND parsed_json IS NOT NULL "
+           "AND (parsed_json LIKE %s OR parsed_json NOT LIKE %s)")
+    params: list = ['%"logo_url": null%', '%"logo_url"%']
+    if limit is not None:
+        sql += " LIMIT %s"; params.append(limit)
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
 def set_listing_embedding(
     niche_key: str, bucket: str, url: str, *,
     embedding_bytes: bytes, model: str, dim: int,
@@ -524,6 +545,18 @@ def set_listing_embedding(
             "UPDATE listing_store SET embedding=%s, embedding_model=%s, embedding_dim=%s "
             "WHERE niche_key=%s AND bucket=%s AND url=%s",
             (embedding_bytes, model, dim, niche_key, bucket, url),
+        )
+
+
+def set_listing_logo(niche_key: str, bucket: str, url: str, *, parsed_json: str) -> None:
+    """Rewrite (only) parsed_json for an already-parsed row — used by logo_backfill_pass to
+    drop a freshly-resolved logo_url into the stored parse. Deliberately does NOT touch
+    parsed_at / content_hash / embedding, so it neither re-triggers the parse pass nor
+    disturbs ranking (mirrors set_listing_embedding's narrow update)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE listing_store SET parsed_json=%s WHERE niche_key=%s AND bucket=%s AND url=%s",
+            (parsed_json, niche_key, bucket, url),
         )
 
 

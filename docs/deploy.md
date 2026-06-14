@@ -65,6 +65,11 @@ broken; still, set Redis).
 - `ALEMBIC_DATABASE_URL` — Supabase direct (`:5432`).
 - `REDIS_URL` — Railway-injected.
 - `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `FIRECRAWL_API_KEY`, `LINKDAPI_KEY`.
+- `LOGODEV_SECRET_KEY` (`sk_…`) + `LOGODEV_PUBLISHABLE_KEY` (`pk_…`) — company-logo resolution in
+  the **worker** parse pass (Brand Search → domain → `img.logo.dev`). FREE (logo.dev, 500k/mo).
+  Optional but **must be set on the worker service**: without the secret key, uncurated company
+  names resolve to a letter avatar instead of a real logo. Logos are resolved once at ingestion
+  and stored (`lib/logo_resolver`); a null is self-healed on the next run (`logo_backfill_pass`).
 - `USE_MOCKS=false` (prod-safety — never ship mocks).
 - `CORS_ORIGINS=https://app.<domain>` (the web service).
 - `SPEND_CAP_USD_DAILY=32` (app graceful-503 below the $50 Anthropic hard cap).

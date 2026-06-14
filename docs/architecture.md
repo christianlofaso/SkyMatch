@@ -256,6 +256,8 @@ FIRECRAWL_PROXY_MODE=auto     # Firecrawl proxy tier: "auto" (default; escalates
 FIRECRAWL_MAX_CONCURRENCY=2   # Cap on simultaneous Firecrawl scrapes — sized to the plan's concurrent-browser limit (free/hobby = 2). Per-process gate in lib/firecrawl.py; prevents the worker over-subscribing Firecrawl (queue-wait → 408s + orphaned jobs). Default 2
 VOYAGE_API_KEY=...            # Voyage embeddings — listing embeddings (worker parse pass) + profile embedding (internships rank). OPTIONAL: absent → ranking skipped, serving falls back
 EMBED_MODEL=voyage-3.5        # Voyage model id (optional; changing it orphans stored vectors — see docs/caching.md)
+LOGODEV_SECRET_KEY=sk_...     # logo.dev Brand Search (name → domain) in the worker logo resolve. OPTIONAL but set on the worker: absent → uncurated company names get a letter avatar, not a logo
+LOGODEV_PUBLISHABLE_KEY=pk_...# logo.dev image URLs (img.logo.dev, monogram fallback); safe to embed. OPTIONAL: absent → resolved domains use Google favicon instead. See lib/logo_resolver
 WORKER_PARSE_CONCURRENCY=8    # Max in-flight Haiku listing-parse calls in the worker parse pass (worker-only; optional)
 ```
 

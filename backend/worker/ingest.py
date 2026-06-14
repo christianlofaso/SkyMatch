@@ -49,12 +49,15 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 import asyncio  # noqa: E402
+import json  # noqa: E402
 import time  # noqa: E402
 
+import httpx  # noqa: E402
+
 from cache import (  # noqa: E402
-    ONE_DAY, count_listings_by_niche_bucket, get_listings_to_embed, get_listings_to_parse,
-    get_rotation_metros, init_db, mark_listing_dead, prune_stale_listings,
-    set_listing_embedding, sum_worker_spend_since, upsert_listing,
+    ONE_DAY, count_listings_by_niche_bucket, get_listings_missing_logo, get_listings_to_embed,
+    get_listings_to_parse, get_rotation_metros, init_db, mark_listing_dead, prune_stale_listings,
+    set_listing_embedding, set_listing_logo, sum_worker_spend_since, upsert_listing,
 )
 from lib.cost import cost_session  # noqa: E402
 from config.niches import (  # noqa: E402
@@ -67,6 +70,7 @@ from lib.ingest_core import (  # noqa: E402
     _scrape_local_listings, _scrape_startup_listings, validate_job_url,
 )
 from lib.listing_parser import build_embed_text  # noqa: E402
+from lib.logo_resolver import resolve_logo  # noqa: E402
 from lib.precompute import parse_and_embed_rows  # noqa: E402
 from lib.timing import timed, timing_session  # noqa: E402
 from schemas import ProfileAnalysis  # noqa: E402
@@ -298,6 +302,42 @@ async def embed_backfill_pass() -> None:
     print(f"[ingest] embed backfill: embedded {n}/{len(rows)}")
 
 
+async def logo_backfill_pass() -> None:
+    """Self-heal logos: re-resolve logo_url for parsed rows where it's null/absent. Without
+    this, a transient logo.dev/network failure — or a half-finished deploy whose resolver
+    returned None for a whole batch — leaves logo_url null, and because the parse pass is
+    incremental (parsed_at already stamped) that null FREEZES forever and the frontend shows a
+    letter avatar for a company that actually has a logo. Cheap and Haiku-/Voyage-free: curated
+    + listing-extracted domains resolve with no network; only an uncurated name costs one
+    logo.dev search. Mirrors embed_backfill_pass (the 'Voyage-down trap')."""
+    rows = get_listings_missing_logo()
+    if not rows:
+        print("[ingest] logo backfill: nothing to re-resolve")
+        return
+    print(f"[ingest] logo backfill: {len(rows)} parsed rows missing a logo")
+    healed = 0
+    sem = asyncio.Semaphore(8)
+    async with httpx.AsyncClient() as client:
+        async def _heal(r: dict) -> None:
+            nonlocal healed
+            try:
+                pj = json.loads(r["parsed_json"])
+            except Exception:
+                return
+            async with sem:
+                logo = await resolve_logo(pj.get("company"), pj.get("company_domain"), client)
+            # Only write when we actually recovered a logo — leave genuinely unresolvable rows
+            # null (correct letter avatar) so this stays idempotent and write-light.
+            if logo and logo != pj.get("logo_url"):
+                pj["logo_url"] = logo
+                await asyncio.to_thread(
+                    set_listing_logo, r["niche_key"], r["bucket"], r["url"], parsed_json=json.dumps(pj)
+                )
+                healed += 1
+        await asyncio.gather(*[_heal(r) for r in rows])
+    print(f"[ingest] logo backfill: healed {healed}/{len(rows)}")
+
+
 async def run_all() -> None:
     init_db()
     with timing_session("ingest run"):
@@ -317,6 +357,10 @@ async def run_all() -> None:
         # Backfill embeddings for any parsed-but-unembedded rows (e.g. Voyage was rate-
         # limited on a prior run) — re-uses the parse, no Haiku.
         await embed_backfill_pass()
+        # Self-heal logos for any parsed-but-null-logo rows (e.g. logo.dev hiccup or a
+        # half-finished deploy resolved nothing) — the incremental parse would otherwise
+        # freeze those nulls forever. No Haiku/Voyage; curated names need no network.
+        await logo_backfill_pass()
 
     print("[ingest] ===== final store counts =====")
     for row in count_listings_by_niche_bucket():
