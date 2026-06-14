@@ -4,22 +4,28 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { parseResume, runPathfinderStream } from "@/lib/api";
 import { type UnifiedProfile } from "@/types/pathfinder";
-import { saveRun } from "@/lib/storage";
+import { saveRun, saveAnalyses } from "@/lib/storage";
+import { scoreRunInternships } from "@/lib/scoreRun";
+import { useAuth } from "@/lib/auth-context";
 
-// All of the profile→run behaviour (LinkedIn URL / paste / résumé upload → /run/stream →
+// All of the profile→run behaviour (LinkedIn URL / paste / resume upload → /run/stream →
 // /results), with NO markup. The landing's ProfileInput component renders the option-j UI
 // on top of this shared hook.
 
 export type RunTab = "url" | "paste";
 type Status = "idle" | "loading" | "error";
 type UploadStatus = "idle" | "uploading" | "done" | "error";
-type Step = "profile" | "internships" | null;
+type Step = "profile" | "internships" | "scoring" | null;
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_EXTS = [".pdf", ".docx"];
 
 export function useProfileRun() {
   const router = useRouter();
+  // The score reveal is gated behind sign-in when enforcement is on; only pre-score when it's
+  // not (else /analyze/batch 401s and the results page shows the sign-in gate instead).
+  const { session, authRequired } = useAuth();
+  const scoreGated = authRequired && !session;
 
   const [tab, setTab] = useState<RunTab>("url");
   const [status, setStatus] = useState<Status>("idle");
@@ -119,7 +125,20 @@ export function useProfileRun() {
         } else if (env.phase === "internships") {
           setStep("internships");
         } else if (env.phase === "done" && env.data) {
-          saveRun(runId, env.data);
+          const result = env.data;
+          saveRun(runId, result);
+          // Pre-score the feed DURING the veil so /results lands fully graded (no second
+          // "Scoring…" pass there). Skipped when gated (page shows the sign-in gate) or if
+          // scoring fails — the results page then scores on arrival, exactly as before.
+          if (!scoreGated) {
+            setStep("scoring");
+            try {
+              const analyses = await scoreRunInternships(result.profile, result.internships);
+              saveAnalyses(runId, analyses);
+            } catch {
+              /* leave it to the results page to score on arrival */
+            }
+          }
           navigated = true;
           router.push(`/results/${runId}`);
         } else if (env.phase === "error") {

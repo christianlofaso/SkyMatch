@@ -19,7 +19,7 @@ const RV_STEPS: Array<[string, string]> = [
 const STEP_AT = [0, 30, 55, 80];
 const TICK_MS = 120;
 
-export function RunVeil({ step }: { step: "profile" | "internships" | null }) {
+export function RunVeil({ step }: { step: "profile" | "internships" | "scoring" | null }) {
   const [pct, setPct] = useState(0);
   // Portal to body: the veil mounts under the hero's FILLED `lift` animation (transform),
   // which would otherwise become the containing block and confine this fixed overlay.
@@ -27,9 +27,10 @@ export function RunVeil({ step }: { step: "profile" | "internships" | null }) {
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    // Soft ceiling per phase: idle eases to 30, `profile` to 60, `internships` to 99. Raising the
-    // cap on a phase change just lets the existing ease continue upward — no floor snap.
-    const cap = step === "internships" ? 99 : step === "profile" ? 60 : 30;
+    // Soft ceiling per phase: idle→30, `profile`→60, `internships`→88, `scoring`→99. Raising the
+    // cap on a phase change just lets the existing ease continue upward — no floor snap. The
+    // `internships` cap leaves headroom so the bar visibly climbs through the real scoring pass.
+    const cap = step === "scoring" ? 99 : step === "internships" ? 88 : step === "profile" ? 60 : 30;
     const tick = () => {
       setPct((p) => (p >= cap ? p : Math.min(p + Math.max((cap - p) * 0.04, 0.3), cap)));
     };
@@ -57,7 +58,7 @@ export function RunVeil({ step }: { step: "profile" | "internships" | null }) {
         <h2 className="rv-title">{title}</h2>
         <p className="rv-desc">{desc}</p>
         <div className="rv-bar"><i style={{ width: `${shown}%` }} /></div>
-        <div className="rv-pct">{shown}% · scanning index</div>
+        <div className="rv-pct">{shown}% · {step === "scoring" ? "grading fit" : "scanning index"}</div>
       </div>
     </div>,
     document.body,
