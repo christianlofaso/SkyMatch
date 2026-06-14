@@ -23,7 +23,29 @@ from urllib.parse import urlsplit
 
 
 def _favicon(domain: str) -> str:
+    # Google's favicon service is RELIABLE for confident/real domains (returns the brand favicon);
+    # it only substitutes a globe for an UNRESOLVABLE domain, which a confident domain isn't. We use
+    # it for the curated map + listing-extracted domains. (unavatar was tried but returns a 0-byte
+    # 200 for some real domains, e.g. adobe.com → a broken image; it's reserved for the frontend's
+    # uncertain slug-guess, where its honest error lets the chain fall through to the letter avatar.)
     return f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
+
+
+def favicon_url(domain: str) -> str:
+    """Public logo URL for a CONFIDENT (real) domain — the curated map or a listing-extracted
+    company domain. See _favicon for why Google (not unavatar) is used for confident domains."""
+    return _favicon(domain)
+
+
+def registrable_domain(url: str | None) -> str | None:
+    """The registrable domain of a URL ("https://www.terminal.io/careers" → "terminal.io"), or
+    None. Used to turn a company's OWN website (recovered from the listing page) into a logo
+    domain — the exact signal a name-search can't guess for a generic name like "Terminal"."""
+    host = _host(url)
+    if not host:
+        return None
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
 # Curated company -> primary domain. Keyed by the lowercased company name AS IT APPEARS on our

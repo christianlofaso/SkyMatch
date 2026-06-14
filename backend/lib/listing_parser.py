@@ -16,6 +16,7 @@ from lib import firecrawl
 from lib.anthropic_client import client as ai
 from lib.cost import record_usage
 from lib.jsonparse import parse_json_with_context, strip_fences
+from lib.logos import registrable_domain
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _PARSE_SYSTEM = (_PROMPTS_DIR / "listing_parse.txt").read_text(encoding="utf-8")
@@ -116,18 +117,28 @@ def _posted_from_markdown(md: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-async def company_from_firecrawl(url: str) -> tuple[str | None, str | None, str | None]:
-    """Render an SPA job page and pull (company, location, posted) from Firecrawl's JOB_SCHEMA
-    extract — the only place these appear for wellfound/workatastartup listings (the posted
-    date is rendered, never in the snippet). Firecrawl 'auto' proxy escalates past Cloudflare
-    (wellfound) server-side when blocked. (None, None, None) on no key / any failure (caller
-    leaves the row as-is)."""
+# Hosts that are the JOB BOARD or a social/profile site — never the company's OWN site, so a
+# company_website pointing here is rejected (we want the real domain, e.g. terminal.io).
+_NON_COMPANY_HOSTS = (
+    "wellfound.com", "angel.co", "workatastartup.com", "ycombinator.com",
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com",
+    "github.com", "greenhouse.io", "lever.co", "ashbyhq.com", "crunchbase.com",
+)
+
+
+async def company_from_firecrawl(url: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """Render an SPA job page and pull (company, location, posted, logo_domain) from Firecrawl's
+    JOB_SCHEMA extract — the only place these appear for wellfound/workatastartup listings (the
+    posted date + the company's own website are rendered, never in the snippet). logo_domain is the
+    registrable domain of the company's OWN website, used to fetch its real logo (the exact signal
+    a name-search can't guess for a generic name like 'Terminal'). Firecrawl 'auto' proxy escalates
+    past Cloudflare server-side when blocked. (None,)*4 on no key / any failure."""
     if not firecrawl.is_available():
-        return None, None, None
+        return None, None, None, None
     try:
         data = await firecrawl.scrape(url, "auto")
     except Exception:
-        return None, None, None
+        return None, None, None, None
     d = (data.get("data") or {}) if data else {}
     ex = d.get("extract") or {}
 
@@ -137,7 +148,11 @@ async def company_from_firecrawl(url: str) -> tuple[str | None, str | None, str 
     # Posted: structured extract first, else regex the rendered markdown (the extract misses it
     # on some renders even though the page shows it).
     posted = _clean(ex.get("date_posted")) or _posted_from_markdown(d.get("markdown") or "")
-    return _clean(ex.get("company_name")), _clean(ex.get("location")), posted
+    # Company logo domain: from the company's OWN website, rejecting the job board / social links.
+    logo_domain = registrable_domain(_clean(ex.get("company_website")))
+    if logo_domain and any(logo_domain == h or logo_domain.endswith("." + h) for h in _NON_COMPANY_HOSTS):
+        logo_domain = None
+    return _clean(ex.get("company_name")), _clean(ex.get("location")), posted, logo_domain
 
 
 def build_embed_text(row: dict) -> str:

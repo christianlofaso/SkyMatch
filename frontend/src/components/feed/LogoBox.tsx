@@ -1,20 +1,53 @@
 "use client";
-import { useState } from "react";
-import { logoLetter, logoAlt } from "@/lib/logo";
+import { useEffect, useMemo, useState } from "react";
+import { logoLetter, logoAlt, companySlug, resolveCompanyDomain, faviconUrl } from "@/lib/logo";
 
-// The square logo box used on feed rows AND in the drawer title. Renders the backend's
-// logo_url as a contained <img>; on a load error (or no url) it falls back to the letter
-// avatar so the box is never empty. The drawer's larger box styling comes from the
-// `.dr-title .logo` parent selector — no variant prop needed.
+const unavatar = (domain: string) => `https://unavatar.io/${encodeURIComponent(domain)}`;
+
+// The square logo box used on feed rows AND in the drawer title. It resolves the company NAME to
+// its real domain (Clearbit autocomplete, see resolveCompanyDomain) and walks an ordered chain of
+// logo sources — backend logo_url → unavatar(resolved domain) → unavatar(<slug>.com guess) — render-
+// ing the first that loads and advancing on each load error; when the chain is exhausted it shows
+// the CSS letter avatar, so the box is never empty AND never stuck on a generic placeholder. The
+// drawer's larger box styling comes from the `.dr-title .logo` parent selector.
 export function LogoBox({ company, logoUrl }: { company: string; logoUrl?: string | null }) {
-  const [err, setErr] = useState(false);
-  const showImg = !!logoUrl && !err;
-  const cls = `logo${logoAlt(company) ? " alt" : ""}${showImg ? " has-img" : ""}`;
+  // undefined = still resolving the name→domain; string = resolved domain; null = no confident match.
+  const [domain, setDomain] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    const ctrl = new AbortController();
+    resolveCompanyDomain(company, ctrl.signal).then((d) => { if (alive) setDomain(d); }).catch(() => {});
+    return () => { alive = false; ctrl.abort(); };
+  }, [company]);
+
+  const sources = useMemo(() => {
+    const out: string[] = [];
+    if (logoUrl) out.push(logoUrl);
+    // While resolving, show only a backend logo (else the letter) — avoids flashing a guess.
+    if (domain !== undefined) {
+      // Confident name-resolved domain → reliable Google favicon. Uncertain <slug>.com → unavatar,
+      // whose honest error lets the chain fall through to the letter (Google would globe a wrong guess).
+      if (domain) out.push(faviconUrl(domain));
+      const slug = companySlug(company);
+      if (slug) out.push(unavatar(`${slug}.com`));
+    }
+    // Dedupe: identical URLs would stall the onError chain (same key → no remount → no re-error).
+    return Array.from(new Set(out));
+  }, [company, logoUrl, domain]);
+
+  const [i, setI] = useState(0);
+  const sig = sources.join("|");
+  // Restart the chain at the most-preferred source whenever the list changes (e.g. the async
+  // domain just resolved, prepending a better source).
+  useEffect(() => { setI(0); }, [sig]);
+
+  const src = i < sources.length ? sources[i] : null;
+  const cls = `logo${logoAlt(company) ? " alt" : ""}${src ? " has-img" : ""}`;
   return (
     <div className={cls} aria-hidden>
-      {showImg ? (
-        // eslint-disable-next-line @next/next/no-img-element -- remote favicons, letter fallback on error
-        <img src={logoUrl!} alt="" loading="lazy" onError={() => setErr(true)} />
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- remote logos, advances/letters on error
+        <img key={src} src={src} alt="" loading="lazy" onError={() => setI((n) => n + 1)} />
       ) : (
         logoLetter(company)
       )}

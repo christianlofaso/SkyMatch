@@ -62,7 +62,7 @@ async def parse_and_embed_rows(rows: list[dict], *, firecrawl_company: bool = Tr
 
             async def _resolve(r: dict, p: dict) -> None:
                 async with fsem:
-                    co, loc, posted = await company_from_firecrawl(r["url"])
+                    co, loc, posted, logo_domain = await company_from_firecrawl(r["url"])
                 if co:
                     p["company"] = co
                 if loc and (not p.get("location") or p["location"] == "Remote / Various"):
@@ -71,6 +71,10 @@ async def parse_and_embed_rows(rows: list[dict], *, firecrawl_company: bool = Tr
                 # snippet parse didn't already (wellfound/workatastartup hide it behind the app).
                 if posted and not p.get("posted_at"):
                     p["posted_at"] = posted
+                # The company's OWN domain (from its website link on the page) → its real logo,
+                # which a name-search can't guess for a generic name like "Terminal".
+                if logo_domain:
+                    p["company_domain"] = logo_domain
 
             async with timed("precompute/parse firecrawl-company"):
                 await asyncio.gather(*[_resolve(r, p) for r, p in spa])

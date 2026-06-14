@@ -47,6 +47,7 @@ JOB_SCHEMA = {
     "properties": {
         "job_title":       {"type": "string", "description": "Job title or position name"},
         "company_name":    {"type": "string", "description": "Hiring company name"},
+        "company_website": {"type": "string", "description": "The hiring company's OWN website URL/homepage (e.g. https://terminal.io) — NOT this job board's URL; empty if not shown"},
         "location":        {"type": "string", "description": "Job location or 'Remote'"},
         "employment_type": {"type": "string", "description": "e.g. Internship, Full-time, Part-time"},
         "date_posted":     {"type": "string", "description": "When the job was posted, as shown (e.g. 'Posted 3 days ago', '1 month ago', 'Jan 5, 2026'); empty if not shown"},
