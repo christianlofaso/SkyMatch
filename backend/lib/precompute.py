@@ -14,12 +14,15 @@ import asyncio
 import json
 import os
 
+import httpx
+
 from cache import set_listing_parse
 from lib import embeddings, firecrawl
 from lib.listing_parser import (
     build_embed_text, company_from_firecrawl, content_hash, needs_firecrawl_company,
     parse_listing_sync,
 )
+from lib.logo_resolver import resolve_logo
 from lib.timing import timed
 
 # Max in-flight Haiku listing-parse calls (Haiku is intentionally ungated by sonnet_slot()).
@@ -78,6 +81,19 @@ async def parse_and_embed_rows(rows: list[dict], *, firecrawl_company: bool = Tr
 
             async with timed("precompute/parse firecrawl-company"):
                 await asyncio.gather(*[_resolve(r, p) for r, p in spa])
+
+    # 1c. Resolve a logo URL per row (server-side, once) → stored in parsed_json so the request path
+    #     and the browser never resolve a logo live. Curated/extracted domains need no network; only
+    #     an uncurated name triggers a single (optional) logo.dev search.
+    async with timed("precompute/logos"):
+        async with httpx.AsyncClient() as lclient:
+            lsem = asyncio.Semaphore(8)
+
+            async def _logo(p: dict) -> None:
+                async with lsem:
+                    p["logo_url"] = await resolve_logo(p.get("company"), p.get("company_domain"), lclient)
+
+            await asyncio.gather(*[_logo(p) for _, p in ok])
 
     # 2. Embed the parsed rows in one batched (<=128/request) Voyage call, if available.
     texts = [build_embed_text(r) for r, _ in ok]

@@ -23,7 +23,7 @@ from lib.anthropic_client import client as ai, sonnet_slot
 from lib.cost import cost_session, record_cache_hit, record_usage
 from lib.jsonparse import parse_json_with_context, strip_fences
 from lib.listing_parser import company_from_url
-from lib.logos import favicon_url, logo_url_for
+from lib.logos import logo_url_for
 from lib.precompute import parse_and_embed_rows
 from lib.timing import timed
 from schemas import (
@@ -300,11 +300,10 @@ def _build_internship(listing: dict, bucket: str) -> Internship:
         application_url=listing.get("url"),
         bucket=bucket,
         reach_gap=None,
-        # Prefer the company's OWN domain recovered from the listing page (exact logo, even for a
-        # generic name like "Terminal" that no name-search can resolve); else the curated/host map.
-        logo_url=(favicon_url(parsed["company_domain"])
-                  if parsed.get("company_domain")
-                  else logo_url_for(company, listing.get("url"))),
+        # Logo resolved + stored at ingestion (lib/logo_resolver: extracted/curated domain or a
+        # logo.dev name search → logo.dev image or Google favicon). For an unparsed row (no stored
+        # value), the curated/host map is the zero-network fallback; else the frontend letter avatar.
+        logo_url=(parsed.get("logo_url") or logo_url_for(company, listing.get("url"))),
         # Drawer fact-grid fields ("" from the parse → None so the frontend treats them as absent).
         company_size=(parsed.get("company_size") or None),
         # Term: prefer the parse's value (new rows); else recover deterministically from the raw

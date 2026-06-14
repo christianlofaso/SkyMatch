@@ -130,6 +130,13 @@ def _is_ats_or_aggregator(host: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in _ATS_AGGREGATOR_HOSTS)
 
 
+def curated_domain(company: str | None) -> str | None:
+    """The curated primary domain for a known company, or None. Exposed for the server-side
+    logo resolver (lib/logo_resolver) as the trusted-domain source between the listing-extracted
+    domain and a logo.dev name search."""
+    return _COMPANY_DOMAINS.get((company or "").strip().lower())
+
+
 def logo_url_for(company: str | None, application_url: str | None = None) -> str | None:
     """Best-effort logo URL for a feed card, or None to fall back to the letter avatar.
 
