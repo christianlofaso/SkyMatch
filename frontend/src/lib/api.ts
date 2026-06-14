@@ -22,6 +22,17 @@ type AnnotateJob = { url: string; bucket: "local" | "big_tech" | "startup" | "re
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+/** Error from a non-OK API response. Carries the HTTP `status` so callers can branch on it —
+ *  e.g. the results page backs off on 429 instead of hammering the rate limiter. */
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
 /**
  * Authorization header for the GATED routes. Returns the current Supabase session's bearer
  * token, or {} when not signed in / auth unconfigured (the backend treats that as anonymous
@@ -172,7 +183,8 @@ export async function* analyzeBatch(
     const authErr = authError(res.status);
     if (authErr) throw authErr;
     const err = await res.json().catch(() => ({ detail: "Unknown error" }));
-    throw new Error(err.detail ?? `HTTP ${res.status}`);
+    // Typed so callers can detect 429 (rate limit) and back off rather than retry-storm.
+    throw new HttpError(res.status, err.detail ?? `HTTP ${res.status}`);
   }
 
   const reader = res.body.getReader();

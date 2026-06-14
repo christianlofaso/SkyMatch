@@ -498,6 +498,15 @@ blockquote.ev { margin-top: 10px; padding: 2px 0 2px 12px; border-left: 2px soli
 .feed-loading { display: flex; align-items: center; gap: 12px; padding: 6px 2px 22px;
   font-family: var(--mono); font-size: 12px; letter-spacing: .06em; color: var(--muted); }
 .feed-loading .az-spinner { width: 18px; height: 18px; border-width: 2px; }
+/* Scoring rate-limit / failure banner (results feed) — shown when whole-batch scoring exhausts its
+   backoff retries; the button re-runs scoring for the still-unscored roles. */
+.score-retry { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin: 2px 0 18px; padding: 12px 16px; border: 1px solid var(--line-2); border-radius: var(--r);
+  background: var(--surface-2); font-size: 13px; color: var(--muted); }
+.score-retry-btn { flex: none; font-family: var(--mono); font-size: 12px; letter-spacing: .04em;
+  color: var(--text); background: transparent; border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 7px 14px; cursor: pointer; transition: border-color .2s, background .2s; }
+.score-retry-btn:hover { border-color: var(--ember); background: var(--bg-2); }
 .az-spinner { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--ember);
   animation: azspin .9s linear infinite; margin: 4px auto 20px; }
 @keyframes azspin { to { transform: rotate(360deg); } }
