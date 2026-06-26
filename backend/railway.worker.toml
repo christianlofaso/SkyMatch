@@ -11,17 +11,20 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# === INGESTION RESUMED 2026-06-21 ===
-# Paused 2026-06-17; resumed to repopulate the index (national pool had aged past
-# SERVE_MAX_AGE_HOURS=48h, leaving big_tech/startup/reach empty). NOTE: staging AND prod
-# both read this file, so this resumes both.
+# === INGESTION PAUSED 2026-06-25 (on request) ===
+# Both the cron schedule and the real start command are disabled so NOTHING ingests —
+# no scheduled tick, and the one start that fires on deploy is a no-op (not a full pass).
+# NOTE: staging AND prod both read this file, so this pauses both. Heads-up: while paused,
+# the national pool ages past SERVE_MAX_AGE_HOURS=48h and big_tech/startup/reach serve empty.
+# TO RESUME: restore the two original lines (kept below as comments) and redeploy:
+#   cronSchedule = "0 */8 * * *"
+#   startCommand = "python -m worker.ingest"
 #
 # Every 8 hours (00:00, 08:00, 16:00 UTC). Keep comfortably under SERVE_MAX_AGE_HOURS
 # (48h) so the index never goes stale. Railway starts a fresh container per tick; it exits
 # when the pass finishes.
-cronSchedule = "0 */8 * * *"
-startCommand = "python -m worker.ingest"
-# TO RE-PAUSE: comment the two lines above and uncomment the no-op below, then redeploy.
-# startCommand = "python -c \"print('ingestion paused — see railway.worker.toml')\""
+# cronSchedule = "0 */8 * * *"
+# startCommand = "python -m worker.ingest"
+startCommand = "python -c \"print('ingestion paused 2026-06-25 — see railway.worker.toml')\""
 # A cron job that exits non-zero shouldn't be retried in a tight loop — wait for the next tick.
 restartPolicyType = "never"
