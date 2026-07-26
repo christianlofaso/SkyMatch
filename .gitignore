@@ -35,6 +35,11 @@ backend/pathfinder_cache.db
 scratch/
 backend/scratch/
 
+# UI design explorations (options a-n, mockups, screenshots). Kept out of the default
+# branch so it reads as the application it is rather than a mockup dump; the full
+# lineage lives on the `design-history` branch and stays on disk locally.
+design-explorations/
+
 # claude code workspace settings (local)
 .claude/
 
