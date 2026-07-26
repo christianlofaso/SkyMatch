@@ -2,13 +2,22 @@
 node_modules/
 frontend/node_modules/
 
-# nextjs
+# nextjs — .next-* covers the isolated dist dirs used to run a second dev server
+# alongside :3000 (NEXT_DIST_DIR=.next-fixed etc., see docs/audit-fixes.md)
 .next/
 frontend/.next/
+.next-*/
+frontend/.next-*/
 
 # env files
 .env
 .env.local
+
+# run logs (uvicorn / worker / eval passes) — regenerated on every run, never source
+*.log
+
+# local Ollama models + runtime (multi-GB, not part of the app)
+ollama/
 
 # python
 venv/
