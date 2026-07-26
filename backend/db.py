@@ -28,7 +28,11 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 # DB concurrency (each checked-out conn maps to a transient server backend under
 # transaction pooling, so this — not WAL — is the concurrency knob now).
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
-DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
+# Raised 5 -> 10: a launch-day burst (e.g. 50 students in an hour) clustered into a few minutes
+# can exceed 5 concurrent pooled checkouts per replica, queueing then PoolTimeout-500ing /run +
+# /analyze. 10 per replica x2 web replicas + the worker stays well under Supabase's backend cap
+# (~60 on small tiers). Override with DB_POOL_MAX. Load-test the spike scenario before launch.
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
 
 # Constructed un-opened (open=False) so importing this module never blocks on a network
 # connect; init_db() opens + waits at app/worker startup (fail fast on a bad URL).

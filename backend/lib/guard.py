@@ -60,9 +60,22 @@ RATE_LIMIT_WINDOW_SEC = _int_env("RATE_LIMIT_WINDOW_SEC", 60)
 RATE_LIMIT_INFLIGHT_TTL_SEC = _int_env("RATE_LIMIT_INFLIGHT_TTL_SEC", 120)
 
 # Spend-cap kill switch. SPEND_CAP_USD_DAILY <= 0 disables the automatic halt.
-SPEND_CAP_USD_DAILY = _float_env("SPEND_CAP_USD_DAILY", 0.0)
+# Default is a SAFE non-zero ($25/day) so a forgotten prod env var fails CLOSED (an automatic
+# halt) rather than OPEN (unbounded spend to the Anthropic account hard cap, which returns raw
+# errors to every user). Override per-environment with SPEND_CAP_USD_DAILY; set it explicitly
+# to 0 only to deliberately disable the in-app cap (the Anthropic Console limit still backstops).
+SPEND_CAP_USD_DAILY = _float_env("SPEND_CAP_USD_DAILY", 25.0)
 SPEND_CAP_WINDOW_SEC = _int_env("SPEND_CAP_WINDOW_SEC", 24 * 3600)
 SPEND_CACHE_TTL_SEC = _int_env("SPEND_CACHE_TTL_SEC", 30)
+
+# Surface the effective cap at import so a misconfigured prod (cap disabled) is obvious in the
+# startup log instead of silently running with no automatic brake.
+if SPEND_CAP_USD_DAILY <= 0:
+    print("[guard] WARNING: SPEND_CAP_USD_DAILY <= 0 — automatic spend-cap halt is DISABLED "
+          "(relying on the Anthropic Console account limit as the only backstop)", flush=True)
+else:
+    print(f"[guard] spend-cap halt active at ${SPEND_CAP_USD_DAILY:.2f} "
+          f"over {SPEND_CAP_WINDOW_SEC // 3600}h", flush=True)
 
 # Redis keys.
 _SPEND_KEY = "guard:spend"
