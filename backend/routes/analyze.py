@@ -44,14 +44,22 @@ _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _REQUIREMENTS_SYSTEM = (_PROMPTS_DIR / "job_requirements_extraction.txt").read_text()
 _EVIDENCE_SYSTEM = (_PROMPTS_DIR / "evidence_matching.txt").read_text()
 _QUICK_VERDICT_SYSTEM = (_PROMPTS_DIR / "quick_verdict.txt").read_text()
+# Boot marker for the quick-verdict prompt. Prompt files load at IMPORT, and uvicorn --reload
+# watches .py (NOT .txt) — so a prompt edit needs a real reload/restart to take effect. This line
+# prints which copy is live so a stale prompt is obvious in the startup log.
+print(f"[analyze] quick_verdict prompt loaded: {len(_QUICK_VERDICT_SYSTEM)} chars "
+      f"({'recalibrated' if 'typically 62' in _QUICK_VERDICT_SYSTEM else 'legacy'})", flush=True)
 _ROADMAP_SYSTEM = (_PROMPTS_DIR / "roadmap.txt").read_text()
 _PROJECT_SUGGESTION_SYSTEM = (_PROMPTS_DIR / "project_suggestion.txt").read_text()
 
 _ROADMAP_NOTE_NO_GAPS = "You match this role's requirements. No prep roadmap needed."
-# Each retry is a full Opus 4096-token roadmap call + URL HEAD validation (~15-20s). Phase 3
-# is ~80% of /analyze latency, so capped at 1 retry (was 2): one backfill pass for thin
-# resource lists, then ship. Under-filled items still pass through (just fewer resource links).
-_ROADMAP_MAX_RETRIES = 1
+# Roadmap retries DISABLED (was 1). Each retry is a full Opus 4096-token call + URL HEAD
+# validation (~15s + ~$0.11) and, in practice, still dropped a URL after the extra call (the
+# allowlist strips it either way) — so the retry bought latency and spend without improving the
+# roadmap. With the widened, topic-matched allowlist (config/resource_allowlist.py) the first
+# pass fills resources well; under-filled items now ship with fewer links rather than triggering
+# a costly backfill. Raise this only if a real regression in resource coverage shows up.
+_ROADMAP_MAX_RETRIES = 0
 
 # Batch endpoint concurrency cap — limits in-flight LLM calls regardless of batch size
 _BATCH_LLM_CONCURRENCY = 8
@@ -721,17 +729,35 @@ async def _run_roadmap(
         print(f"[analyze] roadmap: {len(under_filled)} items under 2 valid resources; retrying")
 
     assert last_roadmap is not None
-    final_items = [
-        RoadmapItem(
+    # Dedupe identical resources ACROSS the whole roadmap, not just within a skill: the same
+    # course (e.g. CS50) was surfacing twice under different items / near-duplicate URLs. Key on
+    # the normalized URL (host+path, ignoring trailing slash + a trailing year segment like
+    # "/x/2024") and the lowercased title so a near-dupe doesn't slip through.
+    def _res_key(r: RoadmapResource) -> tuple[str, str]:
+        u = re.sub(r"/(?:19|20)\d{2}/?$", "", (r.url or "").rstrip("/").lower())
+        return (u, (r.title or "").strip().lower())
+
+    seen_resources: set[tuple[str, str]] = set()
+    final_items: list[RoadmapItem] = []
+    for item in last_roadmap.items:
+        deduped: list[RoadmapResource] = []
+        for r in accumulated.get(item.skill, []):
+            k = _res_key(r)
+            if k in seen_resources:
+                continue
+            seen_resources.add(k)
+            deduped.append(r)
+            if len(deduped) >= 4:
+                break
+        final_items.append(RoadmapItem(
             skill=item.skill,
             priority=item.priority,
             timeline=item.timeline,
             why_it_matters=item.why_it_matters,
             milestone=item.milestone,
-            resources=accumulated.get(item.skill, [])[:4],
-        )
-        for item in last_roadmap.items
-    ][:5]
+            resources=deduped,
+        ))
+    final_items = final_items[:5]
 
     return Roadmap(
         total_timeline=last_roadmap.total_timeline,
@@ -1120,23 +1146,10 @@ async def _analyze_impl(req: AnalyzeRequest):
         print(f"[analyze] user_cache=hit mode={req.mode} key={cache_key[:24]}…")
         if req.mode == "quick":
             return QuickAnalysisResponse(**cached)
-        # For a cached full result, also reconcile its headline against the
-        # current quick cache so stale full entries (computed before the
-        # headline-reconcile fix) self-heal on the next read.
-        quick_key = analysis_cache_key("quick", profile_json, job_id)
-        quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
-        if quick_cached:
-            cur_fit  = cached.get("fit_score")
-            cur_call = (cached.get("verdict") or {}).get("call")
-            new_fit  = int(quick_cached["fit_score"])
-            new_call = quick_cached["verdict"]["call"]
-            if cur_fit != new_fit or cur_call != new_call:
-                print(f"[analyze] self-healing stale full cache: {cur_fit}/{cur_call} -> {new_fit}/{new_call}")
-                cached["fit_score"] = new_fit
-                cached["verdict"]["call"] = new_call
-                await asyncio.to_thread(set_user_analysis_cache, cache_key, "full", cached)
-        else:
-            print(f"[analyze] no quick cache for this job_id; full headline unreconciled")
+        # The full result is authoritative for its OWN headline now (no longer overridden by the
+        # cheaper quick verdict — that override produced the audited contradictions: a headline
+        # above its own category bars, an apply_now over a "prep first" gap note). So a cached
+        # full row is served as-stored; no quick reconcile.
         # Phase 3 backfill: older full-mode cache rows predate roadmap/project.
         # Generate only the missing pieces (honoring include flags) and rewrite
         # the row so the next read is a clean hit.
@@ -1209,25 +1222,15 @@ async def _analyze_impl(req: AnalyzeRequest):
     gaps = _classify_gaps(requirements, evals_by_req)
     full_verdict_call = _compute_verdict_call(full_fit_score, gaps)
 
-    # If a quick analysis already exists for this (profile, job), reuse its
-    # fit_score + verdict.call so the headline numbers the user saw on the
-    # results card don't change when they click through to the full breakdown.
-    # Full mode still owns the deeper output (matches, gaps, category_scores,
-    # evidence snippets, verdict.reasoning) — only the two visible numbers are
-    # taken from the quick cache.
-    quick_key = analysis_cache_key("quick", profile_json, job_id)
-    quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
-    if quick_cached:
-        fit_score = int(quick_cached["fit_score"])
-        verdict_call = quick_cached["verdict"]["call"]
-        print(
-            f"[analyze] full headline reconciled from quick cache: "
-            f"full-computed={full_fit_score}/{full_verdict_call} -> "
-            f"quick={fit_score}/{verdict_call}"
-        )
-    else:
-        fit_score = full_fit_score
-        verdict_call = full_verdict_call
+    # The full analysis owns its OWN headline: fit_score is the weighted average of the category
+    # bars (_compute_fit_score) and verdict_call is the deterministic rule over the evidence gaps
+    # (_compute_verdict_call). We deliberately no longer override these with the cheaper Haiku
+    # quick verdict — that override was the root of the audited contradictions (an 85 headline
+    # sitting above category bars that average 63; an "apply_now" badge over a card whose own gap
+    # note said to prep first). The quick verdict stays a fast feed-triage badge; the full page is
+    # the rigorous, internally-consistent breakdown.
+    fit_score = full_fit_score
+    verdict_call = full_verdict_call
 
     matches: list[MatchItem] = []
     for req_item in requirements:
@@ -1389,18 +1392,8 @@ async def _analyze_stream_prelude(req: AnalyzeRequest):
     cached = await asyncio.to_thread(_get_user_analysis_cache, cache_key)
     if cached:
         print(f"[analyze/stream] user_cache=hit key={cache_key[:24]}…")
-        # Self-heal stale headline from the quick cache (same as _analyze_impl).
-        quick_key = analysis_cache_key("quick", profile_json, job_id)
-        quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
-        if quick_cached:
-            cur_fit = cached.get("fit_score")
-            cur_call = (cached.get("verdict") or {}).get("call")
-            new_fit = int(quick_cached["fit_score"])
-            new_call = quick_cached["verdict"]["call"]
-            if cur_fit != new_fit or cur_call != new_call:
-                cached["fit_score"] = new_fit
-                cached["verdict"]["call"] = new_call
-                await asyncio.to_thread(set_user_analysis_cache, cache_key, "full", cached)
+        # Full result is authoritative for its own headline (no quick override — same fix as the
+        # JSON /analyze path; the override caused the headline-vs-bars contradiction).
         cached = await _phase3_backfill_cached_row(cached, cache_key, req.profile, req.include)
         return ("cache_hit", AnalysisResponse(**cached))
     print(f"[analyze/stream] user_cache=miss key={cache_key[:24]}…")
@@ -1440,16 +1433,11 @@ async def _analyze_stream_prelude(req: AnalyzeRequest):
     gaps = _classify_gaps(requirements, evals_by_req)
     full_verdict_call = _compute_verdict_call(full_fit_score, gaps)
 
-    # Reconcile the headline (fit_score + verdict.call) from the quick cache if one
-    # exists, so the number the user saw on the results card doesn't shift here.
-    quick_key = analysis_cache_key("quick", profile_json, job_id)
-    quick_cached = await asyncio.to_thread(_get_user_analysis_cache, quick_key)
-    if quick_cached:
-        fit_score = int(quick_cached["fit_score"])
-        verdict_call = quick_cached["verdict"]["call"]
-    else:
-        fit_score = full_fit_score
-        verdict_call = full_verdict_call
+    # Full analysis owns its own headline (fit_score = weighted category bars; verdict_call =
+    # deterministic gap rule). No quick-cache override — that was the audited headline-vs-bars
+    # / badge-vs-gap contradiction. (Same change as the JSON /analyze path.)
+    fit_score = full_fit_score
+    verdict_call = full_verdict_call
 
     matches: list[MatchItem] = []
     for req_item in requirements:
@@ -1682,11 +1670,14 @@ async def _quick_for_one(
     return quick
 
 
-# Matcher results-reveal gate: REQUIRES sign-in (require_user) + charges one 'matcher' run;
-# verify_turnstile no-ops until configured. All three no-op when auth is off (dev).
+# First-run-free reveal: anonymous users CAN batch-score (no require_user) so the feed's fit
+# badges appear on their first run before any sign-in. The frontend enforces the one-free-run
+# limit (storage.claimFreeMatcherRun); signed-in users are still charged a 'matcher' run against
+# their daily quota (quota("matcher") no-ops for anonymous). verify_turnstile + the per-IP rate
+# limit + the spend cap backstop anonymous abuse.
 @router.post(
     "/analyze/batch",
-    dependencies=[Depends(require_user), Depends(quota("matcher")), Depends(verify_turnstile)],
+    dependencies=[Depends(quota("matcher")), Depends(verify_turnstile)],
 )
 async def analyze_batch(req: BatchAnalyzeRequest, user: User | None = Depends(optional_user)):
     """Streams ndjson: one BatchEnvelope per line, in completion order.

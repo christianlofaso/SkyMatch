@@ -40,14 +40,20 @@ RULES
      • "Submit a pull request that adds a new endpoint to a real open-source FastAPI project."
      • "Build and publish a small npm package that wraps the Stripe checkout flow."
 6. "timeline" is realistic for a student with ~8 hours/week. "total_timeline" reflects realistic overlap (working on multiple items in parallel), not the literal sum of item timelines.
-7. Resources: 2–4 per item. URL host MUST come from this trusted set:
-     react.dev, developer.mozilla.org, freecodecamp.org,
-     fastapi.tiangolo.com, learn.microsoft.com, docs.python.org,
-     roadmap.sh, github.com, youtube.com, coursera.org, edx.org,
-     udemy.com, frontendmasters.com, pluralsight.com,
-     refactoring.guru, joshwcomeau.com, kentcdodds.com,
-     fullstackopen.com, theodinproject.com, cs50.harvard.edu,
-     ocw.mit.edu
+7. Resources: 2–4 per item. URL host MUST come from this trusted set, and you MUST pick the
+   host that actually OWNS the topic:
+     General/CS/web: react.dev, developer.mozilla.org, freecodecamp.org,
+       fastapi.tiangolo.com, learn.microsoft.com, docs.python.org, roadmap.sh,
+       github.com, youtube.com, coursera.org, edx.org, udemy.com,
+       frontendmasters.com, pluralsight.com, refactoring.guru, joshwcomeau.com,
+       kentcdodds.com, fullstackopen.com, theodinproject.com, cs50.harvard.edu,
+       ocw.mit.edu, khanacademy.org, geeksforgeeks.org, w3schools.com,
+       leetcode.com, neetcode.io, digitalocean.com
+     Hardware / electrical engineering: autodesk.com (Fusion 360 / CAD), arduino.cc,
+       learn.sparkfun.com, sparkfun.com, learn.adafruit.com, adafruit.com,
+       allaboutcircuits.com, circuitdigest.com, ocw.mit.edu
+     Machine learning / data: pytorch.org, tensorflow.org, scikit-learn.org,
+       kaggle.com, huggingface.co, deeplearning.ai, coursera.org
    Each URL MUST point at a SPECIFIC resource page — a particular video
    (youtube.com/watch?v=...), course, article, doc page, or repo. The server
    REJECTS and discards:
@@ -56,10 +62,16 @@ RULES
      • bare domain homepages (e.g. https://coursera.org/)
    Do NOT emit search URLs — they will be dropped, leaving the item with no
    resources. The "title" must accurately name the page the URL points to (do
-   not pair a real-sounding title with an unrelated URL). If you cannot recall
-   a specific real page on an allowlisted domain, OMIT that resource entirely
-   rather than guessing or substituting a search URL — fewer accurate
-   resources beat padded junk.
+   not pair a real-sounding title with an unrelated URL).
+   TOPIC-MATCH THE HOST — this is mandatory and the audited failure mode:
+     • Do NOT cite a learn.microsoft.com URL for a non-Microsoft tool (e.g. Autodesk
+       Fusion 360 lives on autodesk.com, NOT learn.microsoft.com).
+     • Do NOT cite a web-development resource (developer.mozilla.org / react.dev) for a
+       hardware, circuits, CAD, or EE topic — use the hardware/EE hosts above.
+     • Do NOT cite the same resource twice within the roadmap.
+   If no allowlisted host genuinely owns the topic (e.g. obtaining a government security
+   clearance), OMIT the resource entirely — fewer accurate resources beat a confidently
+   wrong link. An item may ship with 0–1 resources; that is acceptable.
 
 ────────────────────────────────────────────────────────────
 OUTPUT — return ONLY this JSON, no prose, no markdown fences

@@ -6,11 +6,19 @@ You are given:
 
 Your job is a quick triage, NOT a deep evidence-by-evidence breakdown:
 - Estimate a fit_score from 0–100 based on how well the candidate covers the must-have requirements first, then the nice-to-haves.
-- Choose a verdict call:
-  - "apply_now": fit_score >= 70 and no critical must-have gaps
-  - "apply_after_prep": fit_score 40–69, OR fit_score >= 70 but with one prepable gap
-  - "skip": fit_score < 40, OR any critical must-have gap (e.g. wrong degree level, missing required years, missing a non-negotiable certification)
+- Choose a verdict call. Being ELIGIBLE is not enough for "apply_now" — every must-have has to be actually met:
+  - "apply_now" (fit_score 72–100): EVERY must-have is clearly met; only preferred / nice-to-have items are missing, and no eligibility gate fails. Nothing material is left to prepare before applying.
+  - "apply_after_prep" (fit_score 58–71, typically 62–68): eligibility is met (no hard gate) and the candidate has genuine overlap, but ONE OR MORE must-haves are missing-yet-prepable — a skill, a tool, a framework, a portfolio piece. This is the common "worth a look" middle: a real but imperfect fit. Center these in the low-to-mid 60s — use the high 60s when only one minor prepable gap remains, and drop toward 58 only when several must-haves are missing. A strong skills match with one notable prepable gap lands here too, even if the raw overlap would otherwise read ≥72.
+  - "skip" (fit_score below ~45): an eligibility gate fails (wrong required major/degree level, missing required years, a non-negotiable certification, work authorization, or a year-explicit class-standing miss), OR most must-haves are absent. A hard-gated role whose SKILLS are otherwise strong still skips, but scores ~45–55 (skills set the floor, the gate sets the call) — not down in the 20s.
 - Write one short sentence (≤ 30 words) of reasoning that names the single strongest factor for the call.
+
+Calibration discipline — USE THE FULL 0–100 SCALE; most real pairings are NOT clear-cut. Do not collapse a borderline fit into the extremes. When the candidate is eligible and genuinely overlapping but missing one or more must-haves, that is "apply_after_prep" in the 55–71 band — resist rounding it UP to "apply_now" (reserve that for a match with nothing left to prepare) or DOWN to "skip" (reserve that for a failed gate or a mostly-absent skill set). A missing-but-prepable must-have is the single most common reason a real candidate lands in this middle band.
+
+Experience + evidence discipline (this prevents over-optimistic "apply_now"):
+- "apply_now" means "nothing material left to prepare." A candidate with LITTLE OR NO relevant internship/work experience applying to a role that expects hands-on experience, a portfolio, or demonstrated builds is NOT "apply_now" even when the named skills nominally overlap — that unmet experience expectation is itself a prepable gap, so it is "apply_after_prep". A no-experience first-year/sophomore with only coursework and hobby projects, against a competitive role, should land in the apply_after_prep band, not apply_now.
+- THIN / SKILL-ONLY requirement lists: if the requirements you were given are sparse or read as a bare list of technologies with NO explicit must-haves (a coarse listing-derived list, not a real job description), do NOT treat "the candidate knows these tools" as license for "apply_now". Without real stated must-haves you cannot conclude nothing is left to prepare — judge on the DEPTH of demonstrated experience and lean "apply_after_prep" for early-career candidates. Reserve "apply_now" for a candidate whose demonstrated experience clearly clears the role's level.
+- Selective / brand-name employers (e.g. top-tier labs, FAANG-scale, highly selective startups): a skills match alone does not make an underclassman "apply_now" there — name the realistic stretch and prefer "apply_after_prep" unless the candidate has standout, level-appropriate experience.
+Be willing to spread scores across the whole middle band — a feed where almost everything reads "apply_now" is miscalibrated.
 
 Return ONLY a JSON object, no markdown, no commentary:
 {
@@ -156,3 +164,38 @@ Why this lands at ~55–68 / "apply_after_prep":
 - BELOW 70 because MUST-HAVES are missing, not just preferred items — the candidate clearly meets several must-haves (closely-related major, lab equipment like oscilloscope/soldering, Python/C scripting) but does NOT clearly meet two: hands-on PCB design in Altium/KiCad (he debugged circuit boards but shows no evidence of designing them) and a portfolio of personal builds. When the gaps are on MUST-HAVES — especially the role's most central skill — the score sits in the 50s–60s, unlike the 74/78 anchors where every must-have was met and only preferred items were missing.
 - "apply_after_prep", not "skip" — there is no critical eligibility gap, and the gaps are genuinely prepable: one KiCad portfolio project (design → fabricate → bring-up) would close both the PCB-design and portfolio gaps at once. That is exactly the 40–69 "apply_after_prep" case.
 - ~60, not lower — the candidate's real hardware internship (circuit-board work, soldering, oscilloscope) plus strong scripting keep it mid-scale; he is adjacent, not unqualified.
+
+---
+
+Calibration anchor — about a 60–68, "apply_after_prep" — a NO-EXPERIENCE first-year against a hands-on role. This is the over-optimism guard: nominal skill overlap must NOT become "apply_now" when the candidate has no real experience and the role expects it.
+
+Profile (different candidate):
+{
+  "headline": "Electrical Engineering student (B.S., 2028), first year",
+  "major": "Electrical Engineering",
+  "technical_skills": ["C++", "Arduino", "basic circuit design", "MATLAB", "soldering"],
+  "work_experience": [],
+  "projects": [{ "name": "Line-following robot", "description": "Arduino + C++ + basic PID, high-school club" }],
+  "education": [{ "school": "UIUC", "field_of_study": "Electrical Engineering", "end_year": 2028 }]
+}
+
+Requirements:
+[
+  { "requirement": "Pursuing a degree in EE, ME, or related engineering", "type": "education", "must_have": true },
+  { "requirement": "Hardware design, development, and testing experience", "type": "experience", "must_have": true },
+  { "requirement": "Experience with 3D CAD tools", "type": "technical", "must_have": true },
+  { "requirement": "Knowledge of hardware engineering fundamentals", "type": "technical", "must_have": true }
+]
+
+Expected output:
+{
+  "fit_score": 62,
+  "verdict": {
+    "call": "apply_after_prep",
+    "reasoning": "Right major and genuine hobby hardware (Arduino/PID/soldering), but no real design-build-test experience or 3D CAD — both expected here and both prepable, so it's apply_after_prep, not apply_now."
+  }
+}
+
+Why this is "apply_after_prep" and NOT "apply_now":
+- The EE major clears the education gate, and the Arduino/soldering background is real, so this is not a "skip".
+- But the role expects hands-on hardware design/development/testing experience and 3D CAD, and the candidate has neither (a first-year with hobby projects only). Nominal skill names overlapping ("circuit design") does NOT mean the experience must-have is met — the unmet experience + CAD are prepable gaps, which is the definition of "apply_after_prep". A no-experience first-year against a competitive hardware role is the textbook over-optimism trap; do not round this up to "apply_now".
