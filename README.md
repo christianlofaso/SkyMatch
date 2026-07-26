@@ -2,7 +2,7 @@
 
 **Paste a LinkedIn profile or résumé, get a shortlist of internships scored honestly against your actual background — with the reasoning attached to every role.**
 
-[![CI](https://github.com/fishfighter12/Pathfinder/actions/workflows/ci.yml/badge.svg)](https://github.com/fishfighter12/Pathfinder/actions/workflows/ci.yml)
+[![CI](https://github.com/christianlofaso/Pathfinder/actions/workflows/ci.yml/badge.svg)](https://github.com/christianlofaso/Pathfinder/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
 ![License](https://img.shields.io/badge/license-MIT-green)
