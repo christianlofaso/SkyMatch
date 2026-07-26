@@ -345,6 +345,29 @@ export function markFreeAnalysisUsed(): void {
   }
 }
 
+// ── First-run-free matcher reveal ─────────────────────────────────────────────
+// An anonymous visitor gets ONE run fully scored + annotated before the sign-in wall, so the
+// product's differentiator (real fit scores + "why you fit") is visible before any commitment.
+// The first run that asks claims the slot; that same runId stays free on return visits, any OTHER
+// run is gated. Per-browser + best-effort (the backend spend cap / rate limit / Turnstile are the
+// real abuse limits); fails OPEN (returns free) under private mode / quota errors so the first-run
+// experience is never hard-blocked by a storage hiccup.
+const FREE_MATCHER_KEY = "pf:free_matcher_run";
+
+/** True if `runId` is allowed a free reveal — claims the single free slot if it's unclaimed. */
+export function claimFreeMatcherRun(runId: string): boolean {
+  const store = ls();
+  if (!store) return true; // no storage → don't hard-gate the first experience
+  try {
+    const claimed = store.getItem(FREE_MATCHER_KEY);
+    if (claimed === runId) return true;            // this run already owns the free slot
+    if (!claimed) { store.setItem(FREE_MATCHER_KEY, runId); return true; }  // claim it now
+    return false;                                  // a different run already used the free slot
+  } catch {
+    return true; // private mode / quota → fail open
+  }
+}
+
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
 const rtf = typeof Intl !== "undefined" && "RelativeTimeFormat" in Intl

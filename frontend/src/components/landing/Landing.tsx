@@ -37,7 +37,7 @@ const PRINCIPLES = [
 ];
 
 const FAQ = [
-  { q: "Do I need to make an account?", a: "No. Paste a profile and run it, anonymously. You only sign in if you want to save runs across devices or use the deeper job fit analyzer." },
+  { q: "Do I need to make an account?", a: "Your first match run is free — paste a profile and see your full scored shortlist with the reasoning on every role, no account needed. After that, a one-tap email sign-in (magic link, no password) unlocks more runs, saves them across devices, and opens the deeper job-fit analyzer." },
   { q: "How does the matching actually work?", a: "Your profile is turned into an embedding that captures skills, level and trajectory. Each indexed role is embedded the same way, so matching compares meaning, not literal keyword overlap, then sorts fit into honest bands against your background." },
   { q: "Why bands instead of a percentage match?", a: "A two digit score implies a precision the model doesn't have. A “67” reads as measured when it isn't. Strong / Worth a look / Stretch tells you what you actually need to know: how hard to push, and where." },
   { q: "Can I still browse by company type?", a: "Yes. Every role carries a type tag: Big tech, Startup, Near you, or Selective. Chips above the feed cut the list to one type while the band order stays put. Roles near you also get a quiet boost in the ranking, because staying close is sometimes the whole point." },
@@ -195,10 +195,18 @@ export function Landing() {
               <h3>Machine Learning Intern</h3>
               <div className="co">Ramp · New York, NY · Summer 2026</div>
               <p className="why">Your two semesters of applied ML and the fraud detection class project map closely to their risk team. <b>The bar is high for a sophomore, but you are about two skills away, not ten.</b> Lead with the project, not the GPA.</p>
-              <div className="bars" aria-hidden>
-                <div className="bar-row"><span className="bl">Skills</span><span className="bar"><i style={{ width: "82%" }} /></span><span className="q">Strong</span></div>
-                <div className="bar-row"><span className="bl">Coursework</span><span className="bar"><i style={{ width: "70%" }} /></span><span className="q">Solid</span></div>
-                <div className="bar-row"><span className="bl">Experience</span><span className="bar"><i style={{ width: "48%", background: "var(--warm)" }} /></span><span className="q">Light</span></div>
+              {/* Honest skill split (mirrors the real role drawer's chips) — no percentage bars,
+                  matching this page's own "bands, not false precision" principle. */}
+              <div className="dr-sub">You already bring</div>
+              <div className="dr-skills">
+                <span className="req-chip ok">✓ Applied ML</span>
+                <span className="req-chip ok">✓ Python</span>
+                <span className="req-chip ok">✓ Fraud-detection project</span>
+              </div>
+              <div className="dr-sub">Worth shoring up</div>
+              <div className="dr-skills">
+                <span className="req-chip ghosted">Production ML pipelines</span>
+                <span className="req-chip ghosted">Distributed systems</span>
               </div>
               <div className="foot"><span className="dot" /> Why this is a stretch, and the plan that closes the gap</div>
             </div>
@@ -228,11 +236,13 @@ export function Landing() {
                     <span className="chip">Selective <span className="cnt">2</span></span>
                   </div>
                   <div className="roles">
-                    <div className="band-head strong"><span>Strong matches</span><span className="rule" /><span className="cnt">4</span></div>
+                    {/* Counts sum to the "All 15" chip and reflect a realistic spread across the
+                        three bands (post-recalibration the middle bands actually populate). */}
+                    <div className="band-head strong"><span>Strong matches</span><span className="rule" /><span className="cnt">3</span></div>
                     {PREVIEW_ROLES.filter((r) => r.band === "strong").map((r, i) => <PreviewRole key={i} {...r} />)}
-                    <div className="band-head look"><span>Worth a look</span><span className="rule" /><span className="cnt">7</span></div>
+                    <div className="band-head look"><span>Worth a look</span><span className="rule" /><span className="cnt">5</span></div>
                     {PREVIEW_ROLES.filter((r) => r.band === "look").map((r, i) => <PreviewRole key={i} {...r} />)}
-                    <div className="band-head stretch"><span>Stretch</span><span className="rule" /><span className="cnt">4</span></div>
+                    <div className="band-head stretch"><span>Stretch</span><span className="rule" /><span className="cnt">2</span></div>
                     {PREVIEW_ROLES.filter((r) => r.band === "stretch").map((r, i) => <PreviewRole key={i} {...r} />)}
                     <div className="notfit"><span>Not a fit right now · 5 roles</span><span className="hint">graded, not hidden</span></div>
                   </div>

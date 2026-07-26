@@ -22,6 +22,7 @@ import {
   loadAnnotations,
   saveAnnotations,
   setActiveRunId,
+  claimFreeMatcherRun,
   type AnalysesByBucket,
   type AnnotationsByBucket,
   type BucketKey,
@@ -110,13 +111,25 @@ export default function ResultsPage() {
   const { has: isSaved, toggle: toggleSaved } = useSaved();
 
   // Auth gate: the results "reveal" (scores via /analyze/batch + "why you fit" via
-  // /internships/annotate) requires sign-in when enforcement is on. Listings still render
-  // as a teaser; only the LLM-fired scores/annotations are gated.
+  // /internships/annotate) requires sign-in when enforcement is on — EXCEPT an anonymous
+  // visitor's FIRST run, which is free (so the differentiator is visible before any commitment).
+  // Listings still render as a teaser for a gated run; only the LLM-fired scores/annotations gate.
   const { session, authRequired, loading: authLoading, signInWithOtp } = useAuth();
   // The static sample shortlist is fully pre-scored/annotated; it must render for logged-out
   // visitors, so it bypasses the sign-in gate (and never fires the scoring/annotate backends).
   const isDemo = id === DEMO_RUN_ID;
-  const needsSignIn = authRequired && !session && !isDemo;
+  // First-run-free: once auth resolves, an anonymous visitor claims one free run; that run reveals
+  // without sign-in, any later run is gated. Resolved in an effect (needs auth state first) so we
+  // don't consume the free slot on a signed-in user's run.
+  const [freeRun, setFreeRun] = useState(false);
+  useEffect(() => {
+    if (authLoading) return;
+    if (!authRequired || session || isDemo) { setFreeRun(false); return; }
+    setFreeRun(claimFreeMatcherRun(id));
+  }, [authLoading, authRequired, session, isDemo, id]);
+  // Gate while auth is still loading (so scoring doesn't fire for a would-be-gated run), then
+  // open it for a signed-in user OR the one free anonymous run.
+  const needsSignIn = authRequired && !isDemo && !session && (authLoading || !freeRun);
 
   useEffect(() => {
     const run = getRun(id);
@@ -440,7 +453,7 @@ export default function ResultsPage() {
   const groups = useMemo(() => {
     const g: Record<Band | "pending", FeedItem[]> = { strong: [], look: [], stretch: [], notfit: [], pending: [] };
     for (const item of visibleItems) {
-      const band = bandOf(analyses[item.bucket]?.[item.idx]);
+      const band = bandOf(analyses[item.bucket]?.[item.idx], item.bucket);
       g[band ?? "pending"].push(item);
     }
     BAND_KEYS.forEach((b) => {
@@ -451,7 +464,7 @@ export default function ResultsPage() {
 
   // Flat "Newest" ordering (excludes notfit — those stay in the collapsed block).
   const newestItems = useMemo(() => {
-    const rows = visibleItems.filter((i) => bandOf(analyses[i.bucket]?.[i.idx]) !== "notfit");
+    const rows = visibleItems.filter((i) => bandOf(analyses[i.bucket]?.[i.idx], i.bucket) !== "notfit");
     return [...rows].sort((x, y) => postedRank(analyses[y.bucket]?.[y.idx]) - postedRank(analyses[x.bucket]?.[x.idx]));
   }, [visibleItems, analyses]);
 
@@ -463,7 +476,7 @@ export default function ResultsPage() {
         key={item.url}
         internship={it}
         bucket={item.bucket}
-        band={needsSignIn ? null : bandOf(analysis)}
+        band={needsSignIn ? null : bandOf(analysis, item.bucket)}
         analysis={analysis}
         saved={isSaved(item.url)}
         gated={needsSignIn}
@@ -504,7 +517,7 @@ export default function ResultsPage() {
   const openAnalysisHref = openAnalysisId ? `/analyze/${openAnalysisId}` : null;
 
   // Stat-card numbers — global (unfiltered), live as scoring lands.
-  const bandsAll = feedItems.map((i) => bandOf(analyses[i.bucket]?.[i.idx]));
+  const bandsAll = feedItems.map((i) => bandOf(analyses[i.bucket]?.[i.idx], i.bucket));
   const strongCount = bandsAll.filter((b) => b === "strong").length;
   const notfitAll = feedItems.filter((_, i) => bandsAll[i] === "notfit");
   const top = feedItems.reduce<{ company: string; band: Band; score: number } | null>((acc, item, i) => {
@@ -588,7 +601,9 @@ export default function ResultsPage() {
       {!needsSignIn && !scoring && (
         <div className="toolbar">
           <div className="chips" role="group" aria-label="Filter by company type">
-            {FILTER_CHIPS.map((c) => (
+            {/* Hide empty type chips (e.g. "Near you" when no local roles surfaced) so the feed
+                never advertises a bucket it can't fill. "All" always shows. */}
+            {FILTER_CHIPS.filter((c) => c.f === "all" || chipCount(c.f) > 0).map((c) => (
               <button key={c.f} className={`chip${filter === c.f ? " on" : ""}`} onClick={() => setFilter(c.f)}>
                 {c.label} <span className="cnt">{chipCount(c.f)}</span>
               </button>
@@ -609,8 +624,8 @@ export default function ResultsPage() {
           <div style={{ marginBottom: 22 }}>
             <SignInGate
               onSubmit={signInWithOtp}
-              title="Sign in to reveal your match scores"
-              subtitle="Your roles are ready below. Sign in (one-tap magic link) to rank them by fit and see why you match each one."
+              title="Sign in to reveal this run's match scores"
+              subtitle="You've used your free match run. Your roles are ready below — sign in (one-tap magic link) to rank them by fit, see why you match each one, and save across devices."
             />
           </div>
         )}
@@ -666,7 +681,7 @@ export default function ResultsPage() {
         open={!!openItem}
         internship={openInternship}
         bucket={openItem?.bucket ?? null}
-        band={openAnalysis ? bandOf(openAnalysis) : null}
+        band={openAnalysis ? bandOf(openAnalysis, openItem?.bucket) : null}
         analysis={openAnalysis}
         annotation={openAnnotation}
         saved={openItem ? isSaved(openItem.url) : false}
