@@ -192,6 +192,27 @@ _STATE_FALLBACK: dict[str, str] = {
     "WI": "Madison",        "WV": "Pittsburgh",     "WY": "Denver",
 }
 
+# Full state NAME → 2-letter code, so a profile location that spells the state out
+# ("Champaign, Illinois" — what the LLM profile extraction emits, vs the "Champaign, IL" the
+# _STATE_FALLBACK map keys on) still resolves to its seeded hub. Without this, a full-name state
+# fell through _parse_metro to the bare city ("Champaign"), which isn't seeded → an 18s live-fetch
+# that returns 0 (the empty home-metro bucket for the UIUC launch audience). DC included.
+_STATE_NAMES: dict[str, str] = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV", "new hampshire": "NH",
+    "new jersey": "NJ", "new mexico": "NM", "new york": "NY", "north carolina": "NC",
+    "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA",
+    "rhode island": "RI", "south carolina": "SC", "south dakota": "SD", "tennessee": "TN",
+    "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
+    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+    "district of columbia": "DC", "washington dc": "DC", "washington d.c.": "DC",
+}
+
+
 _BUILTIN_DOMAINS: dict[str, str] = {
     "Chicago": "builtinchicago.org",
     "New York": "builtinnyc.com",
@@ -283,9 +304,18 @@ def _parse_metro(location: str) -> str:
     city_raw = parts[0] if parts else loc
     if city_raw.lower() in _KNOWN_METROS:
         return city_raw
-    state = parts[-1].strip().upper() if len(parts) > 1 else ""
-    if state in _STATE_FALLBACK:
-        return _STATE_FALLBACK[state]
+    # The trailing component may be a 2-letter code ("IL") OR a spelled-out state name
+    # ("Illinois") — the LLM profile extraction emits the latter. Normalize a full name to its
+    # code first so both forms hit _STATE_FALLBACK and route to a seeded hub (e.g. UIUC's
+    # "Champaign, Illinois" -> Chicago) instead of falling through to the un-seeded bare city.
+    if len(parts) > 1:
+        tail = parts[-1].strip()
+        state = _STATE_NAMES.get(tail.lower(), tail.upper())
+        if state in _STATE_FALLBACK:
+            return _STATE_FALLBACK[state]
+    # A single-token location that is itself a state name ("Illinois") with no city also routes.
+    if loc_lower in _STATE_NAMES and _STATE_NAMES[loc_lower] in _STATE_FALLBACK:
+        return _STATE_FALLBACK[_STATE_NAMES[loc_lower]]
     return city_raw
 
 
@@ -1174,9 +1204,17 @@ async def _scrape_local_listings(profile: ProfileAnalysis) -> list[dict]:
             if len(listings) >= 30:
                 break
 
-    print(f"[local-listings] city={city!r} found {len(listings)} before enrichment")
+    # Require an intern/co-op title (same gate the ATS fetchers use). The local DDG queries are
+    # "intern <city>", but DDG still returns plenty of NON-intern roles (the Chicago pool had a
+    # "Manager", a "Quant", a "Senior Structural Engineer" — all is_internship=False, dropped at
+    # serve, leaving an empty bucket). Filtering here keeps the metro's limited slots for real
+    # interns instead of letting senior roles consume them.
+    pre_intern = [l for l in listings if _is_intern_title(l.get("search_title", ""))]
+    dropped_non_intern = len(listings) - len(pre_intern)
+    print(f"[local-listings] city={city!r} found {len(listings)} before enrichment "
+          f"({dropped_non_intern} dropped as non-intern titles)")
     enrich_sem = asyncio.Semaphore(8)
-    enriched_all = await asyncio.gather(*[_enrich_listing(l, enrich_sem) for l in listings])
+    enriched_all = await asyncio.gather(*[_enrich_listing(l, enrich_sem) for l in pre_intern])
     listings = [
         l for l in enriched_all
         if not l["is_category_page"] and _location_matches_metro(l["verified_location"], city)

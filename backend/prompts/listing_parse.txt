@@ -6,7 +6,7 @@ Respond with ONLY a single JSON object (no array, no markdown, no commentary) wi
 - title: the role title, taken from the Title line (strip the company name and any "[location]"/site cruft). If the Title is unusable, infer a concise role title from the snippet.
 - company: the hiring company name, from the Company or Title line, else the snippet.
 - company_description: ONE short, factual sentence about the company, inferred from the snippet (what it does). If the snippet says nothing about the company, use an empty string "".
-- location: the job location. Prefer the Verified location line verbatim when present and non-null; otherwise read it from the snippet; otherwise "Remote / Various". Do not infer a location from the company name.
+- location: the job location. Prefer the Verified location line verbatim when present and non-null; otherwise read it from the snippet. Use "Remote" ONLY when the listing actually states the role is remote. If you genuinely cannot determine the location, use an empty string "" (serving shows "Location not specified") — do NOT guess "Remote" or invent a city. Do not infer a location from the company name.
 - skills: array of 0-8 concrete technical skills/technologies named or strongly implied by the title/snippet (e.g. "Python", "React", "SQL", "PyTorch", "C++"). Lowercase-insensitive, deduped, short tokens — NOT sentences. [] if none are evident.
 - seniority: ONE of "intern" | "new_grad" | "junior" | "mid" | "senior" | "unknown".
 - role_category: ONE of "software_engineering" | "data_ml" | "hardware_ee" | "finance" | "sales" | "marketing" | "recruiting" | "product" | "design" | "other". Pick the closest; use "other" only when none fit.

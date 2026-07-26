@@ -32,7 +32,10 @@ from schemas import (
 )
 # The local live-fetch fallback (uncovered metros) reuses the profile-independent
 # scrape/validate helpers from lib.ingest_core (the same ones the ingestion worker uses).
-from lib.ingest_core import _scrape_local_listings, _parse_metro, validate_job_url, _is_us_location
+from lib.ingest_core import (
+    _scrape_local_listings, _parse_metro, validate_job_url, _is_us_location,
+    _location_matches_metro,
+)
 
 router = APIRouter()
 # The Anthropic client (shared, max_retries raised) AND the global Sonnet concurrency
@@ -108,7 +111,7 @@ def _annotate_fit_system(bucket: str, city: str | None = None) -> str:
 
 You are given the student profile and the listing's ALREADY-EXTRACTED fields (title, company, location, description, skills). Do NOT re-output those fields. Respond with ONLY a single JSON object (no array, no markdown, no commentary) with exactly these fields:
 - fit_explanation: AT MOST 2 short sentences (~30 words total). MUST name a specific profile detail (a skill, major, school, org, or past company) and connect it to this role. Concrete and scannable — not a paragraph.{near}
-- why: an array of 2-3 SHORT bullet strings (each ~12 words, no trailing period) expanding on the fit — each names a concrete profile detail tied to this role. These are the drawer's "why you fit" bullets; do not just restate fit_explanation verbatim.
+- why: an array of 2-3 SHORT bullet strings (each ~12 words, no trailing period) expanding on the fit. EACH bullet must map a CONCRETE profile detail (a specific skill, project, past employer, or coursework) to a CONCRETE need of THIS role. Do not just restate fit_explanation verbatim. BANNED filler — never emit a bullet whose substance is "member of [club/IEEE/ACM] signals engagement/interest", "[school] has a strong reputation", "major provides a strong foundation", or any sentence that would read identically for almost any role: these are content-free. If you only have 1 genuinely specific, grounded bullet, return just that 1 — fewer real bullets beat padded generic ones.
 - have: an array of the skills (short labels) the student ALREADY demonstrably brings that this role wants — drawn from the listing's skills where they overlap the profile's skills/experience. [] if none clearly overlap.
 - need: an array of the skills (short labels) this posting wants that the profile does NOT yet show — the honest gaps to shore up. Keep it grounded in the listing's skills; [] if the profile covers everything.
 {gap_rule}"""
@@ -226,6 +229,28 @@ def _annotate_fit_sync(
         return None
 
 
+def _fallback_fit(profile: ProfileAnalysis, fields: dict) -> dict:
+    """Deterministic, honest 'why you fit' used when the Sonnet annotate declines/errors, so the
+    card never ships a BLANK fit (the audit found one shipped fully empty). No overselling: it
+    points the student at the listing and surfaces a REAL have/need split by intersecting the
+    listing's parsed skills with the profile's skills (case-insensitive)."""
+    title = (fields.get("title") or "This role").strip()
+    company = (fields.get("company") or "this company").strip()
+    field = (profile.field_of_interest or profile.major or "your background").strip()
+    listing_skills = [s for s in (fields.get("skills") or []) if isinstance(s, str) and s.strip()]
+    prof = {s.lower() for s in (profile.technical_skills or []) if isinstance(s, str)}
+    have = [s for s in listing_skills if s.lower() in prof][:6]
+    need = [s for s in listing_skills if s.lower() not in prof][:6]
+    return {
+        "fit_explanation": f"{title} at {company} — review the listing to see how your "
+                           f"{field} background and skills line up.",
+        "why": [],
+        "have": have,
+        "need": need,
+        "reach_gap": None,
+    }
+
+
 _SEASON_FIX = {"autumn": "Fall"}
 _POSTED_PREFIX_RE = re.compile(r"^\s*(?:re)?posted[\s:\-]*", re.I)
 # Model/extract stand-ins for "no date" — Firecrawl sometimes returns "N/A" literally.
@@ -270,6 +295,23 @@ def _term_from_text(*texts: str | None) -> str | None:
     return None
 
 
+# Honest fallback when no location could be parsed. The legacy parse fallback "Remote / Various"
+# is treated as "unknown" (it was applied indiscriminately on a parse miss and showed up on
+# clearly on-site roles like a DC-onsite Palantir internship — asserting a false fact). A
+# genuinely remote role is parsed as "Remote", not "Remote / Various", so this mapping is safe.
+_LOCATION_UNKNOWN = "Location not specified"
+_LEGACY_LOCATION_FALLBACKS = {"remote / various", "remote/various"}
+
+
+def _display_location(*candidates: str | None) -> str:
+    """First non-empty, non-legacy-fallback location string, else 'Location not specified'."""
+    for c in candidates:
+        s = (c or "").strip()
+        if s and s.lower() not in _LEGACY_LOCATION_FALLBACKS:
+            return s
+    return _LOCATION_UNKNOWN
+
+
 def _build_internship(listing: dict, bucket: str) -> Internship:
     """Assemble a feed card from a listing row with ZERO LLM. Display fields come from the
     ingestion-time parse when present, else the raw scraped columns (warming index / local
@@ -287,7 +329,7 @@ def _build_internship(listing: dict, bucket: str) -> Internship:
     company = (parsed.get("company") or raw_company
                or company_from_url(listing.get("url") or "")
                or listing.get("company") or "Unknown")
-    location = parsed.get("location") or listing.get("verified_location") or "Remote / Various"
+    location = _display_location(parsed.get("location"), listing.get("verified_location"))
     desc = parsed.get("company_description")
     if not desc:
         desc = " ".join((listing.get("snippet") or "").split())[:160]
@@ -319,13 +361,45 @@ def _build_internship(listing: dict, bucket: str) -> Internship:
     )
 
 
+# Suffix/junk-stripped company key so "Palantir" and "Palantir Technologies" collapse to ONE
+# company for the diversity caps. Without this the same employer slipped the per-bucket cap by
+# resolving under two spellings (the audit saw Palantir 4x across big_tech+reach).
+_COMPANY_SUFFIXES = (
+    " technologies", " technology", " labs", " inc", " inc.", " corp", " corp.",
+    " corporation", " llc", " ltd", " co.", " company", " group", " holdings", " ai",
+)
+
+
+def _norm_company(name: str | None) -> str:
+    """Normalized company key for diversity caps: lowercased, common corporate suffix stripped,
+    non-alphanumerics removed. 'Palantir Technologies' and 'Palantir' both -> 'palantir'."""
+    s = (name or "").strip().lower()
+    for suf in _COMPANY_SUFFIXES:
+        if s.endswith(suf):
+            s = s[: -len(suf)].strip()
+            break
+    return re.sub(r"[^a-z0-9]+", "", s)
+
+
+# Max roles per company ACROSS THE WHOLE FEED (not just per bucket) — a normalized company can
+# show at most this many cards total, so the same employer can't dominate via two buckets/spellings.
+_GLOBAL_PER_COMPANY = 2
+
+
 def _select_and_build(
     rows: list[dict], bucket: str, *, per_bucket: int = 5, per_company: int = 2,
+    seen_companies: dict[str, int] | None = None, seen_urls: set[str] | None = None,
 ) -> list[Internship]:
     """Deterministic replacement for the old Sonnet SELECT + _cap: walk the cosine-ranked
     rows in order, build each card, and keep the top `per_bucket` while enforcing
     company-diversity (<= per_company per company — mirrors the dropped SELECT 'prefer
-    VARIETY' instruction) and dropping exact-duplicate (company, title) roles. No LLM."""
+    VARIETY' instruction) and dropping exact-duplicate (company, title) roles. No LLM.
+
+    When `seen_companies`/`seen_urls` are passed (shared across buckets, in priority order),
+    selection ALSO enforces a feed-wide per-company cap (_GLOBAL_PER_COMPANY) and never repeats
+    a URL already placed in an earlier bucket — so a single employer/role can't appear under two
+    buckets or two name spellings. Each bucket still fills up to `per_bucket` from its deep
+    (_PRESELECT) ranked pool, pulling the next distinct company to backfill a capped slot."""
     company_counts: dict[str, int] = {}
     seen_roles: set[tuple[str, str]] = set()
     out: list[Internship] = []
@@ -337,18 +411,31 @@ def _select_and_build(
         except Exception as e:
             print(f"[serve] skipped malformed {bucket} row ({row.get('url', '?')}): {e!r}")
             continue
+        # Cross-bucket URL de-dup: the same posting placed in an earlier (higher-priority) bucket
+        # is not repeated here (the feed already shows it once).
+        if seen_urls is not None and item.application_url and item.application_url in seen_urls:
+            continue
         key = item.company.lower()
+        norm = _norm_company(item.company)
         # Skip an exact repeat of the same role at the same company (same title posted under
         # multiple URLs) — the per-company cap alone would otherwise show it twice.
-        role = (key, item.title.strip().lower())
+        role = (norm or key, item.title.strip().lower())
         if role in seen_roles:
             continue
-        # Diversity cap, but NOT for unresolved companies: many distinct "Unknown" listings
-        # are different companies, so capping them at per_company would wrongly collapse the
-        # bucket (the live-fetch-unparsed case). Resolved companies still cap at per_company.
-        if key not in ("", "unknown") and company_counts.get(key, 0) >= per_company:
+        resolved = norm not in ("", "unknown")
+        # Per-bucket diversity cap, but NOT for unresolved companies: many distinct "Unknown"
+        # listings are different companies, so capping them would wrongly collapse the bucket
+        # (the live-fetch-unparsed case). Resolved companies still cap at per_company.
+        if resolved and company_counts.get(norm, 0) >= per_company:
             continue
-        company_counts[key] = company_counts.get(key, 0) + 1
+        # Feed-wide cap (shared across buckets) — same guard, resolved companies only.
+        if resolved and seen_companies is not None and seen_companies.get(norm, 0) >= _GLOBAL_PER_COMPANY:
+            continue
+        company_counts[norm] = company_counts.get(norm, 0) + 1
+        if resolved and seen_companies is not None:
+            seen_companies[norm] = seen_companies.get(norm, 0) + 1
+        if seen_urls is not None and item.application_url:
+            seen_urls.add(item.application_url)
         seen_roles.add(role)
         out.append(item)
         if len(out) >= per_bucket:
@@ -382,6 +469,30 @@ def _serve_national_rows(niche_key: str, bucket: str) -> list[dict]:
 # Bound the on-request local scrape for an uncovered metro so a slow/rate-limited DDG can't
 # hang /run; on timeout we serve an empty local bucket (the worker backfills next run).
 _LIVE_LOCAL_BUDGET = 35  # seconds
+# De-tax: a metro whose live-fetch came back empty is remembered here so the NEXT visitor in that
+# metro doesn't re-pay the ~18s scrape that returns nothing. (Previously an empty metro was still
+# promoted into rotation, then re-fetched on every visit because the index stayed empty — a
+# permanent latency tax on any metro that genuinely has no local ATS hits.) Per-process + TTL'd:
+# a small market can populate later, and a worker run / restart clears it. The _parse_metro
+# full-state-name fix routes most college towns to a seeded hub, so this only guards true blanks.
+_EMPTY_LOCAL_TTL = int(os.getenv("EMPTY_LOCAL_TTL_SEC", str(6 * 3600)))  # 6h
+_empty_local_until: dict[str, float] = {}
+
+
+def _local_recently_empty(metro: str) -> bool:
+    import time as _t
+    until = _empty_local_until.get(metro)
+    if until is None:
+        return False
+    if until < _t.time():
+        _empty_local_until.pop(metro, None)
+        return False
+    return True
+
+
+def _mark_local_empty(metro: str) -> None:
+    import time as _t
+    _empty_local_until[metro] = _t.time() + _EMPTY_LOCAL_TTL
 # Embedding pre-rank: each bucket pool is cosine-ranked against the profile embedding and
 # narrowed to this many. _select_and_build then trims to the final per-bucket cap (5) with
 # company-diversity. Kept comfortably above 5 so the diversity trim has candidates to fill 5.
@@ -395,14 +506,15 @@ _PRESELECT = 18
 # sync with listing_parser.ROLE_CATEGORIES.
 _OFF_FIELD_CATEGORIES = {"finance", "sales", "marketing", "recruiting", "audit"}
 _OFF_FIELD_BUCKETS = {"reach", "local"}
-# US-location gate: big_tech is a national pool served to US students, but its Workday/ATS
-# feeds return plenty of overseas intern roles (Intel Costa-Rica/Malaysia, ADI Philippines/
-# Thailand) — genuine non-fits that score below 50. Drop them at serve time on the resolved
-# location (see lib.ingest_core._is_us_location — permissive, drops only on an explicit non-US
-# token). Serve-time placement catches rows already in the index + ATS-sourced rows, not just
-# the ones the ingestion gate stops going forward. startup is left out (curated by hand) and
-# reach is intentionally global; only big_tech needs this.
-_US_LOCATION_BUCKETS = {"big_tech"}
+# US-location gate: the national pools are served to US students, but their feeds return plenty
+# of overseas intern roles (Intel Costa-Rica/Malaysia, ADI Philippines/Thailand on big_tech; a
+# Wellfound "AI Training (Hindi), Remote India" gig on startup; a Sydney Stripe role on reach) —
+# genuine non-fits that an audit flagged as junk in a 15-slot feed. Applied to ALL THREE national
+# buckets now (was big_tech only — startup/reach were assumed curated but leaked foreign roles).
+# Drops at serve time on the resolved location via lib.ingest_core._is_us_location, which is
+# PERMISSIVE: it drops only on an explicit non-US token and keeps ambiguous/missing locations, so
+# it won't nuke a legit US row whose location is vague. local is inherently US-metro, so excluded.
+_US_LOCATION_BUCKETS = {"big_tech", "startup", "reach"}
 # Deterministic title backstop for the off-field gate — catches UNPARSED rows (a metro's
 # index still warming, before the worker's parse pass sets role_category) + parse misses,
 # exactly like _PHD_TITLE_RE does for the PhD gate. Without it, an unparsed Marketing/Sales
@@ -583,11 +695,20 @@ async def _live_local_fetch(profile: ProfileAnalysis, metro: str) -> list[dict]:
             await asyncio.wait_for(_do(), timeout=_LIVE_LOCAL_BUDGET)
     except (asyncio.TimeoutError, Exception) as e:
         print(f"[serve] live-local fetch for metro={metro!r} failed/timeout: {e}")
-    await asyncio.to_thread(add_rotation_metro, metro, "serving")   # promote regardless — worker backfills next run
     # Return the freshly-persisted rows (parsed+embedded where the inline parse succeeded) so
     # rank+build use the precompute THIS request; unparsed survivors fall back gracefully.
     rows = await asyncio.to_thread(get_listings, metro, "local", max_age=_SERVE_MAX_AGE)
-    print(f"[serve] metro={metro!r} NOT in rotation — live-fetched, serving {len(rows)} local rows, promoted")
+    if rows:
+        # Real hits → promote into the rotation so the worker keeps it warm + the next user serves
+        # from the index (no re-fetch).
+        await asyncio.to_thread(add_rotation_metro, metro, "serving")
+        print(f"[serve] metro={metro!r} live-fetched {len(rows)} local rows, promoted to rotation")
+    else:
+        # Genuinely empty → do NOT promote (promoting an empty metro caused a permanent re-fetch
+        # loop). Remember it so the next visitor skips the ~18s scrape for a while.
+        _mark_local_empty(metro)
+        print(f"[serve] metro={metro!r} live-fetched 0 local rows — not promoted, "
+              f"suppressing re-fetch for {_EMPTY_LOCAL_TTL // 3600}h")
     return rows
 
 
@@ -622,19 +743,53 @@ async def search_internships(profile: ProfileAnalysis) -> InternshipBuckets:
         print(f"[serve] metro={metro!r} in rotation — local from index ({len(local_rows)} rows)")
     # Fall back to a live fetch when the metro is NOT in rotation OR is seeded-but-not-yet-
     # ingested (empty/stale index) — so seeding a metro can never serve an empty local bucket.
-    # Once the worker has populated the 30 seeded metros, this never fires for them.
-    if not local_rows:
+    # Once the worker has populated the 30 seeded metros, this never fires for them. Skip the
+    # fetch (serve an empty local bucket) when this metro was JUST live-fetched empty — avoids
+    # re-paying the ~18s scrape for a metro that genuinely has no local ATS hits right now.
+    if not local_rows and not _local_recently_empty(metro):
         local_rows = await _live_local_fetch(profile, metro)
+    elif not local_rows:
+        print(f"[serve] metro={metro!r} recently live-fetched empty — skipping re-fetch, local=0")
 
     print(f"[serve] index sizes: startup={len(nat_startup)} big_tech={len(nat_bigtech)} "
           f"reach={len(reach_rows)} local={len(local_rows)}")
 
     # bucket -> candidate rows in minimal serving shape
+    startup_l = _to_listings(nat_startup)
+    bigtech_l = _to_listings(nat_bigtech)
+    reach_l = _to_listings(reach_rows)
+    local_l = _to_listings(local_rows)
+
+    # SUPPLEMENT "Near you" from the national pools. The DDG-based local scrape is unreliable
+    # (it returns ~0 metro-located interns — every candidate enrichment-drops as wrong-location /
+    # category page), so the per-metro local index is often empty or stale junk. But the national
+    # startup/big_tech/reach pools are already validated + parsed + located, and many of those
+    # roles ARE physically in the student's metro. A national intern role in the metro IS a local
+    # role: pull it into "Near you" here. Cross-bucket de-dup (local is built FIRST in
+    # _select_and_build) then shows each such role once, tagged "Near you", and drops it from its
+    # national bucket. Precise: _location_matches_metro keeps only an explicit metro match (remote
+    # / unknown / out-of-metro are excluded), so this never mislabels a remote role as local.
+    seen_local = {l["url"] for l in local_l}
+    metro_added = 0
+    for l in (bigtech_l + startup_l + reach_l):
+        if l["url"] in seen_local:
+            continue
+        p = l.get("parsed")
+        if p and p.get("is_internship") is False:
+            continue
+        loc = (p.get("location") if p else None) or l.get("verified_location") or l.get("snippet")
+        if _location_matches_metro(loc, metro):
+            local_l.append(l)
+            seen_local.add(l["url"])
+            metro_added += 1
+    if metro_added:
+        print(f"[serve] near-you: +{metro_added} national role(s) in metro={metro!r}")
+
     pools: dict[str, list[dict]] = {
-        "startup":  _to_listings(nat_startup),
-        "big_tech": _to_listings(nat_bigtech),
-        "reach":    _to_listings(reach_rows),
-        "local":    _to_listings(local_rows),
+        "startup":  startup_l,
+        "big_tech": bigtech_l,
+        "reach":    reach_l,
+        "local":    local_l,
     }
 
     # ── 2. RANK (no LLM): embed the profile once, pre-filter ineligible rows, and
@@ -649,8 +804,18 @@ async def search_internships(profile: ProfileAnalysis) -> InternshipBuckets:
         else:
             print("[serve] profile embedding unavailable — serving unranked pools (DB order)")
 
-    # ── 3. SELECT + BUILD (no LLM): company-diversity trim → cards from precomputed fields.
-    buckets = {b: _select_and_build(rows, b) for b, rows in pools.items()}
+    # ── 3. SELECT + BUILD (no LLM): per-bucket company-diversity trim PLUS a feed-wide
+    #        per-company cap + cross-bucket URL de-dup (shared state walked in priority order),
+    #        so one employer can't appear 4x across big_tech+reach under two name spellings.
+    #        Each bucket still fills to 5 from its deep ranked pool by backfilling distinct
+    #        companies. Priority order keeps a shared company in the more actionable bucket.
+    seen_companies: dict[str, int] = {}
+    seen_urls: set[str] = set()
+    buckets: dict[str, list[Internship]] = {}
+    for b in ("local", "big_tech", "startup", "reach"):
+        buckets[b] = _select_and_build(
+            pools[b], b, seen_companies=seen_companies, seen_urls=seen_urls,
+        )
     print("[serve] feed sizes: " + ", ".join(f"{b}={len(items)}" for b, items in buckets.items()))
 
     return InternshipBuckets(
@@ -711,7 +876,11 @@ async def _annotate_one(
             out = await asyncio.to_thread(_annotate_fit_sync, profile, fields, bucket, city)
         if out:  # cache only a real, non-empty result — declines/errors re-attempt next time
             await asyncio.to_thread(set_annotate_cache, key, out)
-        out = out or {}
+        else:
+            # Model declined / errored: ship a deterministic, honest fallback instead of a BLANK
+            # "why you fit" (the audit found a fully-empty card shipped to the user). Not cached,
+            # so a real attempt happens on the next view.
+            out = _fallback_fit(profile, fields)
         return AnnotateEnvelope(
             index=i, status="ok",
             fit_explanation=out.get("fit_explanation") or "",
@@ -728,12 +897,13 @@ async def _annotate_one(
         )
 
 
-# Part of the matcher results-reveal gate: REQUIRES sign-in (require_user). NOT separately
-# quota'd — one results page expands many cards (the matcher run is charged once on
-# /analyze/batch). verify_turnstile no-ops until configured; both no-op when auth is off (dev).
+# First-run-free reveal: anonymous users CAN annotate (no require_user) so the differentiated
+# "why you fit" text is visible on their first run before any sign-in. The frontend enforces the
+# one-free-run limit (storage.claimFreeMatcherRun); the spend cap + per-IP rate limit + Turnstile
+# (verify_turnstile, no-op until configured) backstop abuse. Signed-in users are unaffected.
 @router.post(
     "/internships/annotate",
-    dependencies=[Depends(require_user), Depends(verify_turnstile)],
+    dependencies=[Depends(verify_turnstile)],
 )
 async def internships_annotate_route(req: AnnotateRequest, user: User | None = Depends(optional_user)):
     """Streams ndjson: one AnnotateEnvelope per line, in completion order. Each job is a

@@ -19,7 +19,7 @@ import httpx
 from cache import set_listing_parse
 from lib import embeddings, firecrawl
 from lib.listing_parser import (
-    build_embed_text, company_from_firecrawl, content_hash, needs_firecrawl_company,
+    build_embed_text, company_from_firecrawl, content_hash, needs_firecrawl_enrichment,
     parse_listing_sync,
 )
 from lib.logo_resolver import resolve_logo
@@ -55,11 +55,14 @@ async def parse_and_embed_rows(rows: list[dict], *, firecrawl_company: bool = Tr
     ok = [(r, p) for r, p in zip(rows, parsed_list) if p is not None]
     n_haiku_fail = len(rows) - len(ok)
 
-    # 1b. Resolve company for SPA listings whose company is still "Unknown" — wellfound/
-    #     workatastartup hide it behind the rendered page. Incremental + bounded; failures
-    #     leave the row as-is. Skipped when firecrawl_company=False (e.g. local live-fetch).
+    # 1b. Render SPA listings (wellfound/workatastartup) to recover company AND/OR location
+    #     AND/OR posted date — all three live only behind the Cloudflare-walled page. Fires when
+    #     ANY is missing (not just company), so a known-company row still gets its real city
+    #     instead of the "Remote / Various" fallback. Incremental + bounded; failures leave the
+    #     row as-is. Skipped when firecrawl_company=False (e.g. the request-time local live-fetch).
     if firecrawl_company:
-        spa = [(r, p) for r, p in ok if needs_firecrawl_company(r["url"], p.get("company"))]
+        spa = [(r, p) for r, p in ok
+               if needs_firecrawl_enrichment(r["url"], p.get("company"), p.get("location"), p.get("posted_at"))]
         if spa and firecrawl.is_available():
             fsem = asyncio.Semaphore(4)
 

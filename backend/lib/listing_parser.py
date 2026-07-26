@@ -104,6 +104,31 @@ def needs_firecrawl_company(url: str, company: str | None) -> bool:
     return any(d in host for d in _FIRECRAWL_COMPANY_DOMAINS)
 
 
+_LOCATION_FALLBACKS = ("", "remote / various", "remote/various")
+
+
+def needs_firecrawl_enrichment(
+    url: str, company: str | None, location: str | None, posted: str | None,
+) -> bool:
+    """Broader trigger than needs_firecrawl_company: render an SPA board (wellfound/
+    workatastartup) when ANY of company / location / posted_at is still missing. All three live
+    ONLY on the Cloudflare-walled rendered page (the snippet + URL carry none of them), so one
+    render recovers whichever are absent. Previously the render fired only for a missing COMPANY,
+    so a row with a known company but no location (e.g. an Astranis wellfound listing whose name
+    is in the title) kept the 'Remote / Various' fallback and displayed 'Location not specified'
+    even though the page clearly states the city."""
+    host = (urlparse(url or "").netloc or "").lower()
+    if not any(d in host for d in _FIRECRAWL_COMPANY_DOMAINS):
+        return False
+    if is_placeholder_company(company):
+        return True
+    if (location or "").strip().lower() in _LOCATION_FALLBACKS:
+        return True
+    if not (posted or "").strip():
+        return True
+    return False
+
+
 # Posted-date recovery from rendered markdown — the structured extract misses date_posted on
 # some renders even when the page shows it ("Posted: 4 weeks ago"). Prefer a "posted … ago"
 # phrase; fall back to a bare "<n> <unit> ago". Group 1 is the clean "<n> <unit> ago" (no prefix).
@@ -210,8 +235,11 @@ def _normalize_parsed(p: dict, listing: dict) -> dict:
         "title": _as_str(p.get("title"), _as_str(listing.get("search_title"), "Internship")),
         "company": _resolve_company(p.get("company"), listing),
         "company_description": _as_str(p.get("company_description")),
+        # Empty (not "Remote / Various") when unknown: the old indiscriminate "Remote / Various"
+        # fallback asserted a false fact on on-site roles. Serving maps an empty/legacy value to
+        # an honest "Location not specified" (routes/internships._display_location).
         "location": _as_str(
-            p.get("location"), _as_str(listing.get("verified_location"), "Remote / Various")
+            p.get("location"), _as_str(listing.get("verified_location"), "")
         ),
         "skills": skills,
         "seniority": _as_str(p.get("seniority"), "unknown").lower(),
