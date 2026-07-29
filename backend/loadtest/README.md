@@ -1,13 +1,13 @@
 # Load test (M9)
 
 Validates the production shape under concurrency: the **2-replica** web service, the
-**Redis-backed guard** (per-IP rate + concurrency limiter), and the **org-wide Sonnet
+**Redis backed guard** (per IP rate + concurrency limiter), and the **org wide Sonnet
 governor** (`SONNET_MAX_CONCURRENCY`) holding across replicas. Run it against **staging**,
 never prod.
 
 Built on [Locust](https://locust.io/) (Python, fits the backend venv; no extra binary).
 
-## Install (one-time, into the backend venv)
+## Install (one time, into the backend venv)
 
 ```
 cd backend
@@ -15,21 +15,21 @@ venv\Scripts\activate
 pip install -r loadtest/requirements-loadtest.txt
 ```
 
-Kept out of `requirements.txt` on purpose, so load-test deps never ship in the prod image.
+Kept out of `requirements.txt` on purpose, so load test deps never ship in the prod image.
 
 ## Scenarios (choose cost with `--tags`)
 
 | `--tags`    | Endpoint                 | LLM cost | What it validates |
 |-------------|--------------------------|----------|-------------------|
 | `smoke`     | `GET /health`            | none     | LB / routing across both replicas, health |
-| `serve`     | `POST /internships/search` | none   | Replicas + Postgres pool + embedding rank under load (zero-LLM serve path) |
-| `guard`     | `POST /internships/search` (no wait) | none | Per-IP rate limiter returns clean **429** (not 5xx) under burst |
+| `serve`     | `POST /internships/search` | none   | Replicas + Postgres pool + embedding rank under load (zero LLM serve path) |
+| `guard`     | `POST /internships/search` (no wait) | none | Per IP rate limiter returns clean **429** (not 5xx) under burst |
 | `governor`  | `POST /analyze` (full)   | **REAL $** | `SONNET_MAX_CONCURRENCY` cap holds across replicas, **paid Sonnet + Opus** |
 
 **Default (no `--tags`)** runs `smoke` + `serve` + `guard`, everything except the paid
 `governor` scenario, so an accidental run never burns Anthropic budget.
 
-`429` (rate-limited) and `503` (kill switch / spend cap) are **expected** under load and are
+`429` (rate limited) and `503` (kill switch / spend cap) are **expected** under load and are
 counted as successes; only unexpected statuses fail the run.
 
 ## Run
@@ -57,7 +57,7 @@ locust -f loadtest/locustfile.py --host https://api-staging.<domain> \
 
 ### Validating throughput (`serve`)
 
-The per-IP limiter will cap a single-host run fast. To measure real serve throughput,
+The per IP limiter will cap a single host run fast. To measure real serve throughput,
 **temporarily raise `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_CONCURRENT` on the staging web
 service** (or run distributed Locust workers across hosts), then run `--tags serve`.
 
@@ -69,7 +69,7 @@ service** (or run distributed Locust workers across hosts), then run `--tags ser
    set PF_AUTH_TOKEN=eyJ...           &  :: Windows
    set PF_TURNSTILE_TOKEN=...
    ```
-3. Run a modest concurrency (the governor caps in-flight Sonnet at `SONNET_MAX_CONCURRENCY`,
+3. Run a modest concurrency (the governor caps in flight Sonnet at `SONNET_MAX_CONCURRENCY`,
    default 6, you want enough VUs to exceed that):
    ```
    locust -f loadtest/locustfile.py --host https://api-staging.<domain> \
@@ -86,7 +86,7 @@ service** (or run distributed Locust workers across hosts), then run `--tags ser
 | `PF_AUTH_TOKEN` | Bearer token (Supabase user JWT) for the `governor` scenario |
 | `PF_TURNSTILE_TOKEN` | `X-Turnstile-Token` value, if Turnstile is enabled on the target |
 
-## Sanity-check the file without firing traffic
+## Sanity check the file without firing traffic
 
 ```
 locust -f loadtest/locustfile.py --host http://localhost:8000 --list

@@ -29,7 +29,7 @@ certifications:      list[str]          # default []
 sources:             list[Literal["linkedin", "resume"]]  # default []
 ```
 
-`UnifiedProfile` is a Pydantic subclass of `ProfileAnalysis`. It passes everywhere a `ProfileAnalysis` is expected. All extra fields default to empty so LinkedIn-only runs are valid without a resume.
+`UnifiedProfile` is a Pydantic subclass of `ProfileAnalysis`. It passes everywhere a `ProfileAnalysis` is expected. All extra fields default to empty so LinkedIn only runs are valid without a resume.
 
 ### Rich submodels
 ```python
@@ -87,7 +87,7 @@ class Internship:    title, company, location, company_description, fit_explanat
                      application_url, bucket, reach_gap, logo_url=None  # logo_url: lib/logos, None → letter avatar
 class InternshipBuckets: local, big_tech, startup, reach, each list[Internship] max 5
 ```
-> `Internship.fit_explanation` now **defaults `""`**: the zero-LLM `/run` feed ships it empty and the results page fills it lazily via `/internships/annotate` (see [routes.md](routes.md)). Keep `InternshipSchema.fit_explanation` as `.default("")` in `skymatch.ts` in sync.
+> `Internship.fit_explanation` now **defaults `""`**: the zero LLM `/run` feed ships it empty and the results page fills it lazily via `/internships/annotate` (see [routes.md](routes.md)). Keep `InternshipSchema.fit_explanation` as `.default("")` in `skymatch.ts` in sync.
 
 ### Deferred annotation (POST /internships/annotate, ndjson)
 ```python
@@ -98,7 +98,7 @@ class AnnotateEnvelope: index: int;  status: "ok" | "error";  fit_explanation?: 
 ```
 Frontend mirror: `AnnotateEnvelopeSchema` / `AnnotateEnvelope` in `skymatch.ts`.
 
-> `why`/`have`/`need` are the drawer's enriched content (added when the option-j UI was ported): `why` = 2-3 "why you fit" bullets; `have` = skills the student already brings (⊆ the listing's parsed skills); `need` = skills the posting wants that the profile lacks. The slim fit-only annotate call (`_annotate_fit_sync`, `MODEL_MID`, max_tokens 400) emits all of them in one JSON object alongside `fit_explanation`/`reach_gap`; the page renders `why`/`have`/`need` in the role drawer. Old `annotate_cache` entries predating the enrichment lack these keys and degrade to `[]` (read with `.get(..., [])`).
+> `why`/`have`/`need` are the drawer's enriched content (added when the option j UI was ported): `why` = 2-3 "why you fit" bullets; `have` = skills the student already brings (⊆ the listing's parsed skills); `need` = skills the posting wants that the profile lacks. The slim fit only annotate call (`_annotate_fit_sync`, `MODEL_MID`, max_tokens 400) emits all of them in one JSON object alongside `fit_explanation`/`reach_gap`; the page renders `why`/`have`/`need` in the role drawer. Old `annotate_cache` entries predating the enrichment lack these keys and degrade to `[]` (read with `.get(..., [])`).
 
 ### Request/Response
 ```python

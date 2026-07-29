@@ -22,9 +22,9 @@
 [timing] ...            # Per-stage wall-clock; ends with "[timing] ===== /run: total Nms =====" sorted breakdown
 ```
 
-**Global error handler:** `main.py` registers `@app.exception_handler(Exception)` as a backstop, any unhandled exception that escapes a route logs `[error] unhandled …` + a full `traceback.print_exc()` and returns a clean `500 {"detail": "Something went wrong on our end. Please try again."}` (no raw exception text leaks). FastAPI's built-in `HTTPException` / `RequestValidationError` handlers run first and never reach it; the streaming routes carry their own per-job envelopes. It has a `# SENTRY:` hook comment for when a DSN is wired (deferred). Logging stays `print()`-based (host captures stdout in prod).
+**Global error handler:** `main.py` registers `@app.exception_handler(Exception)` as a backstop, any unhandled exception that escapes a route logs `[error] unhandled …` + a full `traceback.print_exc()` and returns a clean `500 {"detail": "Something went wrong on our end. Please try again."}` (no raw exception text leaks). FastAPI's built in `HTTPException` / `RequestValidationError` handlers run first and never reach it; the streaming routes carry their own per job envelopes. It has a `# SENTRY:` hook comment for when a DSN is wired (deferred). Logging stays `print()`-based (host captures stdout in prod).
 
-**Timing/observability:** `backend/lib/timing.py` provides `timing_session(name)` (collects spans, prints a sorted % breakdown on exit), `timed(label)` (async ctx mgr), and `timed_call(label, coro)` (await a coro under a span, handy inside `asyncio.gather`). `/run` is wrapped in a session; profile, connections (search + claude), and internships (`/1` scrapes → `/2` claude calls → `/3` url-finding → `/4` validation, each sub-timed) all emit spans. Parallel spans overlap, so per-span ms sum to more than the session total, the **total is the real latency**; the % is each branch's share of wall-clock.
+**Timing/observability:** `backend/lib/timing.py` provides `timing_session(name)` (collects spans, prints a sorted % breakdown on exit), `timed(label)` (async ctx mgr), and `timed_call(label, coro)` (await a coro under a span, handy inside `asyncio.gather`). `/run` is wrapped in a session; profile, connections (search + claude), and internships (`/1` scrapes → `/2` claude calls → `/3` url finding → `/4` validation, each subtimed) all emit spans. Parallel spans overlap, so per span ms sum to more than the session total, the **total is the real latency**; the % is each branch's share of wall clock.
 
 Key `[analyze]` and `[batch]` log lines:
 ```
@@ -55,7 +55,7 @@ Key `[analyze]` and `[batch]` log lines:
 [batch] job[i] failed code=FETCH_FAILED msg=...
 ```
 
-**Streaming-endpoint session names:** the four ndjson streamers open their `timing_session`/`cost_session` INSIDE the generator (so spend + timing are captured after the route returns). Session names: `/analyze/batch (N jobs)`, `/internships/annotate (N jobs)`, `/run/stream`, and, for `/analyze/stream`, **two** sessions: `"/analyze/stream prelude"` (extract + match spend, runs before the StreamingResponse) and `"/analyze/stream phase3"` (roadmap + project spend, inside the generator). So a single `/analyze/stream` request prints **two `[cost]` ledgers** by design, a single `with` can't straddle the route's `return` of the StreamingResponse.
+**Streaming endpoint session names:** the four ndjson streamers open their `timing_session`/`cost_session` INSIDE the generator (so spend + timing are captured after the route returns). Session names: `/analyze/batch (N jobs)`, `/internships/annotate (N jobs)`, `/run/stream`, and, for `/analyze/stream`, **two** sessions: `"/analyze/stream prelude"` (extract + match spend, runs before the StreamingResponse) and `"/analyze/stream phase3"` (roadmap + project spend, inside the generator). So a single `/analyze/stream` request prints **two `[cost]` ledgers** by design, a single `with` can't straddle the route's `return` of the StreamingResponse.
 
 Frontend console (from `/results/[id]`):
 ```
