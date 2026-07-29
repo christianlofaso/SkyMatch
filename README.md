@@ -11,7 +11,28 @@
 > cost-governance layer wrapped around three Claude models. The codebase is named `pathfinder`;
 > the product is SkyMatch.
 
-<!-- SCREENSHOT:FEED -->
+![The ranked shortlist — roles grouped into readiness bands, each carrying its company-type tag and fit signal](docs/images/feed.webp)
+
+<details>
+<summary><b>More screenshots</b> — the role drawer, the landing page, and the full feed</summary>
+
+<br>
+
+**Role drawer** — every match shows its work: why it landed where it did, which requirements are
+already met, and what is left to close.
+
+![Role drawer showing the why-you-fit reasoning and skill alignment chips](docs/images/drawer.webp)
+
+**The full feed** — all three bands plus the collapsed "not a fit right now" block, which grades
+poor matches in plain sight rather than silently dropping them.
+
+![Full feed showing strong, worth-a-look and stretch bands](docs/images/feed-full.webp)
+
+**Landing page.**
+
+![SkyMatch landing page](docs/images/landing.webp)
+
+</details>
 
 ---
 
