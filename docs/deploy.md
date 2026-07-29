@@ -21,7 +21,7 @@ Vercel (frontend)            Railway (compute + Redis)            Supabase (Post
 | Where | Action |
 |-------|--------|
 | **Domain registrar** | Own a domain. Decide `app.<domain>` (frontend) + `api.<domain>` (backend). |
-| **Supabase** | Create **two** projects: `skymatch-staging`, `skymatch-prod` (co-locate region with Railway). **Pro tier** for daily backups / PITR. In each: enable **Email (magic link)** auth; add the redirect URL `https://app.<domain>` (+ the staging URL). Grab per project: **project URL** (the backend auth switch, JWKS-verifies the project's ES256 user tokens), `anon` key, `service_role` key, and the legacy `JWT secret` (HS256 fallback only). |
+| **Supabase** | Create **two** projects: `skymatch-staging`, `skymatch-prod` (colocate region with Railway). **Pro tier** for daily backups / PITR. In each: enable **Email (magic link)** auth; add the redirect URL `https://app.<domain>` (+ the staging URL). Grab per project: **project URL** (the backend auth switch, JWKS-verifies the project's ES256 user tokens), `anon` key, `service_role` key, and the legacy `JWT secret` (HS256 fallback only). |
 | **Railway** | Create a project with **2 environments** (staging, prod). In each, add **3 services** (see §2) + a **Redis** plugin. |
 | **Vercel** | Import the repo; root directory `frontend/`. Add the custom domain `app.<domain>`. |
 | **Cloudflare** | Proxy `api.<domain>` → Railway. Turnstile: create a widget → **site key** (frontend) + **secret key** (backend). |

@@ -57,7 +57,7 @@ at the point of use, not just in a commit message.
 | [docs/frontend.md](docs/frontend.md) | working on pages, components, theme/CSS vars, sessionStorage flow, or type safety |
 | [docs/logging.md](docs/logging.md) | reading logs or adding a log line, `[analyze]`/`[timing]`/`[cost]`/`[validate]` conventions |
 | [docs/development.md](docs/development.md) | doing a recurring task, adding a profile field, site handler, bucket, model constant, tuning weights, adjusting Phase 3 / batch knobs |
-| [docs/gotchas.md](docs/gotchas.md) | **anything non-trivial, read this first.** Async/blocking traps, Opus 4.8 quirks, `max_tokens` truncation, mojibake, Cloudflare-walled domains, cache subtleties |
+| [docs/gotchas.md](docs/gotchas.md) | **anything nontrivial, read this first.** Async/blocking traps, Opus 4.8 quirks, `max_tokens` truncation, mojibake, Cloudflare-walled domains, cache subtleties |
 | [docs/deploy.md](docs/deploy.md) | deploying / changing infra, Vercel + Railway (web ×2 + worker cron + Redis) + Supabase, env-var inventory, CI + staging→prod promote, Dockerfile/`railway.toml`, pre-launch checklist |
 
 **Keep sources of truth in sync:** `backend/schemas.py` ⇄ `frontend/src/types/skymatch.ts` for

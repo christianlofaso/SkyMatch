@@ -2,11 +2,11 @@
 Date: 2026-06-05 · Goal: Decide how to deploy the FastAPI backend (+ SQLite + ingestion worker) to production, surfacing every constraint before writing config.
 
 ## Summary / key decisions  (FINAL, reconciled)
-**Goal:** production-grade, horizontally-scalable backend launch (not a demo). Time is not a constraint, the deferred Postgres+Redis rework IS the deploy.
+**Goal:** production-grade, horizontally scalable backend launch (not a demo). Time is not a constraint, the deferred Postgres+Redis rework IS the deploy.
 
 **Stack (locked):**
 - **Frontend** → Vercel at `app.<domain>`. **Backend** → Railway at `api.<domain>` (custom domain owned; route `api.<domain>` through **Cloudflare** for WAF/DDoS). Frontend↔backend share parent domain for clean magic-link redirects + CORS.
-- **Database** → **Supabase Postgres** for ALL app data + auth (Option B). Railway runs **compute + Redis only**. Co-locate Railway + Supabase regions; use Supabase **pooler** endpoint. Likely Supabase **Pro tier** (backups + connections).
+- **Database** → **Supabase Postgres** for ALL app data + auth (Option B). Railway runs **compute + Redis only**. Colocate Railway + Supabase regions; use Supabase **pooler** endpoint. Likely Supabase **Pro tier** (backups + connections).
 - **Compute on Railway:** **web service = 2 fixed replicas** (redundancy + rolling deploys; autoscale later) + **worker service** (`python -m worker.ingest` via Railway **Cron ~6h**). Both connect to Supabase via `DATABASE_URL`.
 - **Redis (Railway):** externalize the 3 in-process singletons → per-IP rate limiter, spend-cap total (manual kill-switch flag stays in `app_flags` in Supabase Postgres; reads fail-open), and `sonnet_sem` → **TTL token-bucket** sized to the Anthropic org Sonnet/min limit.
 
@@ -57,14 +57,14 @@ Date: 2026-06-05 · Goal: Decide how to deploy the FastAPI backend (+ SQLite + i
 - Captured: **Superseded by the next answer.** User then said: *"let's just plan for the full launch, I am not worried about time."*
 
 ### Q4b, REVERSAL: build for the full launch now
-- Captured: **Drop the staged/soft-launch plan. Build the real, launch-ready, horizontally-scalable architecture from day one.** Time is not a constraint.
+- Captured: **Drop the staged/soft-launch plan. Build the real, launch-ready, horizontally scalable architecture from day one.** Time is not a constraint.
 - This **overrides Q2's Option A and Q4's A1.** We are now doing the full Postgres + Redis rework (the old "Phase 2") as the actual deploy.
 
 ## Decisions locked  (UPDATED, full-launch architecture)
 > ⚠️ Postgres host in this block was later changed by **Q14 → Supabase Postgres** (Railway = compute + Redis only). Read with that override.
-- **Target = production-grade, horizontally-scalable from launch.** No single-worker soft launch.
+- **Target = production-grade, horizontally scalable from launch.** No single-worker soft launch.
 - **Platform = Railway** (compute + managed **Redis**); **database = Supabase Postgres** (per Q14).
-- **Data layer → Supabase Postgres.** Rewrite `cache.py` (702 lines, ~15 SQLite-specific constructs) + `worker/ingest.py` data access off SQLite/WAL onto Postgres. Co-location constraint dissolves → **worker becomes its own Railway service.**
+- **Data layer → Supabase Postgres.** Rewrite `cache.py` (702 lines, ~15 SQLite-specific constructs) + `worker/ingest.py` data access off SQLite/WAL onto Postgres. Colocation constraint dissolves → **worker becomes its own Railway service.**
 - **Coordination state → Redis.** The three in-process singletons must move to Redis so >1 web replica is correct:
   - per-IP rate limiter + concurrency caps (`lib/guard.py`)
   - rolling spend-cap total + manual kill switch (`lib/guard.py` / `app_flags`)
@@ -162,13 +162,13 @@ Date: 2026-06-05 · Goal: Decide how to deploy the FastAPI backend (+ SQLite + i
 ### Q14, Which Postgres holds app data (Supabase vs Railway)?
 - Asked: Supabase Postgres for everything (B) vs Railway Postgres for data + Supabase identity-only (C)?
 - Captured: **Option B (LOCKED), consolidate on Supabase Postgres for ALL app data + auth.** Railway runs only **compute (web + worker) + Redis**. One DB, one backup regime.
-- **Latency tradeoff accepted:** every request-path DB query crosses providers (Railway compute → Supabase Postgres). MITIGATE: (1) **co-locate regions**, pick the Railway region + Supabase region in the **same geography**; (2) use the **Supabase connection pooler** (pgBouncer) endpoint, not direct, given 2 replicas + worker.
+- **Latency tradeoff accepted:** every request-path DB query crosses providers (Railway compute → Supabase Postgres). MITIGATE: (1) **colocate regions**, pick the Railway region + Supabase region in the **same geography**; (2) use the **Supabase connection pooler** (pgBouncer) endpoint, not direct, given 2 replicas + worker.
 - **Ripple fixes to earlier answers (all "Railway Postgres" → "Supabase Postgres"):**
   - Q4b/Q8/Q9/Q11/Q13 data layer now targets **Supabase Postgres**; `DATABASE_URL` = Supabase pooler connection string (Redis stays Railway-injected `REDIS_URL`).
   - **Backups (Q11):** now **Supabase's** backup feature, NOTE this needs **Supabase Pro tier** for daily backups / PITR (free tier is limited). Tested restore still required.
   - **Staging vs prod (Q11):** Supabase environments = **separate projects** → provision **two Supabase projects** (staging + prod), each with its own keys/JWT secret. Railway environments handle compute/Redis per env.
   - Worker service connects to the same Supabase Postgres via `DATABASE_URL`.
-- Flags: Supabase **Pro tier** likely required (backups + connection limits) → cost line for Chris. Region co-location is a setup-time must.
+- Flags: Supabase **Pro tier** likely required (backups + connection limits) → cost line for Chris. Region colocation is a setup-time must.
 
 ### Q15, Completeness sweep
 - Asked: Legal/PII, LinkedIn risk, USE_MOCKS, retention, Cloudflare, load test, plus anything else?
@@ -184,7 +184,7 @@ Date: 2026-06-05 · Goal: Decide how to deploy the FastAPI backend (+ SQLite + i
 
 ## Open flags (pending input)
 - BLOCKER-FOR-LAUNCH: Supabase Postgres + Redis rework, now the actual deploy (no longer deferred).
-- ACTION (Chris, external): set Anthropic Console hard budget cap (~$50/day); provide exact domain; read Anthropic Sonnet tier limits; provision 2 Supabase projects (staging+prod, co-located region, likely Pro tier).
+- ACTION (Chris, external): set Anthropic Console hard budget cap (~$50/day); provide exact domain; read Anthropic Sonnet tier limits; provision 2 Supabase projects (staging+prod, colocated region, likely Pro tier).
 - AUTHOR (Chris): privacy policy + ToS + data-retention policy + deletion path.
 - ACCEPTED RISK: LinkedIn/LinkdAPI scraping ToS exposure, launch as-is.
 - PROVIDE: exact domain string → Chris (for CORS, Supabase redirect, Railway/Vercel custom domains).

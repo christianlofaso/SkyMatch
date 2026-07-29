@@ -37,7 +37,7 @@ poor matches in plain sight rather than silently dropping them.
 
 ## Try it in 30 seconds, no API keys, no database
 
-The repo ships a complete pre-computed sample run, so you can see the real UI without provisioning
+The repo ships a complete precomputed sample run, so you can see the real UI without provisioning
 anything:
 
 ```bash
@@ -81,7 +81,7 @@ A personal project with a public URL and a card on file is one bug away from an 
 [`backend/lib/guard.py`](backend/lib/guard.py) implements:
 
 - **A rolling spend cap with an automatic kill switch**: gated routes return 503 once the window's
-  spend hits the cap. It defaults to a non-zero `$25/day` so a forgotten env var fails *closed*
+  spend hits the cap. It defaults to a nonzero `$25/day` so a forgotten env var fails *closed*
   rather than open, and the effective cap is printed at startup.
 - **A separate worker spend bucket**, so ingestion can never trip the user-facing kill switch.
 - **Per-IP sliding-window rate limiting + a concurrency cap.**
@@ -105,7 +105,7 @@ readiness bands into a single undifferentiated pile, and told a no-experience fi
 now to competitive hardware roles.
 
 The fix was twofold: give the middle verdict an explicit score band with worked calibration anchors
-in the prompt (including a deliberate over-optimism counter-example), and make the *verdict* rather
+in the prompt (including a deliberate overoptimism counterexample), and make the *verdict* rather
 than the raw score drive banding. Written up with before/after in
 [`docs/audit-fixes.md`](docs/audit-fixes.md).
 

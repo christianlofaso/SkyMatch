@@ -26,7 +26,7 @@ manual promote (see `deploy.md §4`).
       (backend / Railway-via-Cloudflare). Write them down, many later values reference them.
 
 ### Step 2, Supabase (create TWO projects: `skymatch-staging`, `skymatch-prod`)
-For **each** project (co-locate region with Railway):
+For **each** project (colocate region with Railway):
 - [ ] Create the project on a tier with **daily backups / PITR** (Pro), needed for the
       backup-restore checklist item.
 - [ ] **Authentication → Providers → Email**: enable **magic link**.
@@ -147,7 +147,7 @@ After all secrets are set, in order:
          `DO $$ DECLARE r record; BEGIN FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' LOOP EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY;', r.tablename); END LOOP; END $$;`
          then verify `SELECT tablename FROM pg_tables WHERE schemaname='public' AND rowsecurity=false;`
          returns zero rows. The follow-on "RLS enabled but no policy" advisor notices are expected,
-         do NOT add policies. **This must be re-run on prod after its first migration.**
+         do NOT add policies. **This must be rerun on prod after its first migration.**
 2. [ ] **Run the worker once** in staging (trigger the cron service manually) → national buckets
        populate. National buckets are empty until this runs.
 3. [ ] Set frontend `NEXT_PUBLIC_AUTH_REQUIRED=true` **and** backend `SUPABASE_URL` together to
@@ -163,4 +163,4 @@ After all secrets are set, in order:
          run paid `governor` only deliberately with `PF_AUTH_TOKEN` set).
    - [ ] Privacy/ToS/account-deletion published (counsel finalizes legal copy + contact emails).
 5. [ ] **Promote to prod**: repeat §A Step 2-7 for the prod project/environment, then Railway
-       redeploy prod from the same commit + Vercel promote the build. Re-run the §5 checks.
+       redeploy prod from the same commit + Vercel promote the build. Rerun the §5 checks.

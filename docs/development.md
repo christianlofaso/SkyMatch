@@ -56,7 +56,7 @@ Add to `backend/config/models.py` and import from there. Don't inline model stri
 ## Adding a learning-resource domain to the roadmap allowlist
 1. Edit `ALLOWED_DOMAINS` in `backend/config/resource_allowlist.py` (add the bare host, e.g. `"educative.io"`). Suffix matching means subdomains are accepted automatically.
 2. Update the inline domain list in `backend/prompts/roadmap.txt` (under RULES, point 7) so the LLM knows it's allowed. The server is still the final authority via `is_allowlisted()`, but hinting reduces wasted retries.
-3. Clear the `url_liveness_cache` table if URLs from the new domain were previously HEAD-rejected and need re-checking: `DELETE FROM url_liveness_cache`.
+3. Clear the `url_liveness_cache` table if URLs from the new domain were previously HEAD-rejected and need rechecking: `DELETE FROM url_liveness_cache`.
 
 ## Adjusting Phase 3 retry budget or item caps
 - Roadmap retry count: `_ROADMAP_MAX_RETRIES` near the top of `routes/analyze.py` (default 2 additional attempts on top of the initial call).

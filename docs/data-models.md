@@ -31,7 +31,7 @@ sources:             list[Literal["linkedin", "resume"]]  # default []
 
 `UnifiedProfile` is a Pydantic subclass of `ProfileAnalysis`. It passes everywhere a `ProfileAnalysis` is expected. All extra fields default to empty so LinkedIn-only runs are valid without a resume.
 
-### Rich sub-models
+### Rich submodels
 ```python
 class SkillEntry:    skill: str;  context: str        # where/how skill was used
 class EducationEntry: school, degree, field_of_study, start_year, end_year

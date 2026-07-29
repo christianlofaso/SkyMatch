@@ -38,7 +38,7 @@ on load via `/analyze/batch`, also cached.)
   is in the rotation (`metro_rotation` table, **seeded with the ~30 `SEED_METROS`** covering where
   CS/ECE students intern; `_STATE_FALLBACK` routes every US state + college towns onto one of them,
   so nearly all students serve from the index). It's **live-fetched** at request time only when the
-  metro isn't in rotation **OR its local index is empty/stale** (e.g. a freshly-seeded metro the
+  metro isn't in rotation **OR its local index is empty/stale** (e.g. a freshly seeded metro the
   worker hasn't ingested yet, so seeding never serves an empty bucket) (bounded ~35s): scrape +
   validate + upsert, then **run the SAME parse precompute the worker does, Haiku company/role_category
   + Voyage embedding, INLINE** (`lib/precompute.parse_and_embed_rows`, the only LLM on the request
@@ -63,7 +63,7 @@ on load via `/analyze/batch`, also cached.)
     are treated as *missing* at every step. For SPA boards where the company is only on the rendered
     page (wellfound/workatastartup), the parse pass additionally runs a bounded
     `company_from_firecrawl()` render to recover it.
-  - **Two follow-on passes** in the worker keep the precompute consistent without re-running Haiku:
+  - **Two follow-on passes** in the worker keep the precompute consistent without rerunning Haiku:
     `embed_backfill_pass()` embeds rows that were parsed but never embedded (e.g. Voyage was down,
     `parsed_at` is set on parse success alone, so they'd otherwise never re-enter the parse queue); the
     `scratch/backfill_company*.py` tools re-resolve companies for already-parsed rows (URL-based +

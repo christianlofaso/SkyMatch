@@ -68,7 +68,7 @@ cause: `_STATE_FALLBACK` only keyed on 2-letter codes, but the LLM emits the ful
   (in rotation, served from the index, no live-fetch).
 - `backend/routes/internships.py` `search_internships`, **"Near you" is now supplemented from the
   national pools**: any validated, parsed national intern role physically in the student's metro is
-  pulled into "local" (cross-bucket de-dup shows it once, tagged "Near you", and removes it from its
+  pulled into "local" (cross-bucket dedup shows it once, tagged "Near you", and removes it from its
   national bucket). The DDG local scrape is unreliable (returns ~0 metro-located interns); the
   national pools are already validated/parsed/located.
 - `backend/routes/internships.py` de-tax: a metro whose live-fetch returns 0 is **no longer
@@ -80,7 +80,7 @@ cause: `_STATE_FALLBACK` only keyed on 2-letter codes, but the LLM emits the ful
 **Verified:** Champaign now routes to Chicago (in rotation, no 18s tax; `/run` 38s → ~21s). An SF
 profile gets **"near-you: +39"** national roles and a populated "Near you" (Speak, Herdora, Mosaic,
 Astranis…). Chicago is genuinely thin in our pools (~1-2 matches, filtered) → "Near you" gracefully
-hides. The pre-existing junk Chicago local rows are dropped at serve (`is_internship=false`).
+hides. The preexisting junk Chicago local rows are dropped at serve (`is_internship=false`).
 
 ### 4. First-run-free reveal (value was fully behind a magic-link email wall)
 **Problem:** an anonymous visitor saw a scoreless teaser and had to complete an email magic-link
@@ -139,7 +139,7 @@ the weighted bar average of 60 (was 72 over 60; sophomore was 85 over 63).
   resource); allows an item to ship with 0-1 resources rather than a wrong link.
 - `backend/routes/analyze.py` `_ROADMAP_MAX_RETRIES = 0` (was 1), the retry cost ~15s/$0.11 and
   still dropped a URL; dropped per decision (keep Opus quality, faster + cheaper). Added a
-  whole-roadmap resource de-dup (normalized URL + title).
+  whole-roadmap resource dedup (normalized URL + title).
 
 **Verified:** freshman roadmap now cites "Autodesk Fusion 360 Tutorial" (YouTube), "How to Read a
 Schematic" + "Voltage Dividers" (SparkFun), was Microsoft-Learn-for-Fusion360, MDN Web Serial, and
@@ -166,9 +166,9 @@ row now serves `location = San Francisco`, `posted = 1 month ago`. ~103 SPA rows
 ### 10. Junk / mis-targeted feed rows
 - `backend/routes/internships.py` `_US_LOCATION_BUCKETS` now includes **startup + reach** (was
   big_tech only), drops the "AI Training (Hindi), Remote India" gig and the Sydney Stripe role.
-- Cross-bucket company de-dup: `_norm_company` collapses "Palantir" and "Palantir Technologies";
+- Cross-bucket company dedup: `_norm_company` collapses "Palantir" and "Palantir Technologies";
   `_select_and_build` enforces a **feed-wide** per-company cap (`_GLOBAL_PER_COMPANY = 2`) + a
-  cross-bucket URL de-dup, walked in priority order. **Verified:** Palantir no longer appears 4×
+  cross-bucket URL dedup, walked in priority order. **Verified:** Palantir no longer appears 4×
   (reach went 5 → 4 as the duplicate collapsed); the Hindi gig is gone (replaced by a real SF role).
 
 ### 11. Generic / blank annotations
@@ -220,7 +220,7 @@ worker. (A real load test of the spike scenario before launch is still recommend
   gracefully hides for UIUC. Major metros (SF/NYC/Seattle/Austin) populate well. Fully populating
   every metro's local bucket needs better local sourcing in the ingestion worker (out of scope here).
 - **Cache masks prompt changes:** the staging analysis/annotate caches key on the profile, so
-  re-running an identical profile serves the old cached LLM output. Verification used cache-busted
+  rerunning an identical profile serves the old cached LLM output. Verification used cache-busted
   profile variants. A prod rollout benefits from clearing `user_analysis_cache` / `annotate_cache`
   (or they self-refresh as content hashes change).
 - `frontend/tsconfig.json` gained a `.next-fixed/types` include line (auto-added by Next for the
