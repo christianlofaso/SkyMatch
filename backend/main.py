@@ -40,7 +40,7 @@ from routes.cost import router as cost_router
 from routes.admin import router as admin_router
 from routes.account import router as account_router
 
-app = FastAPI(title="Pathfinder API")
+app = FastAPI(title="SkyMatch API")
 
 # Allowed browser origins. Comma-separated CORS_ORIGINS in prod (e.g. "https://app.example.com");
 # defaults to localhost for dev. MUST be set to the deployed frontend origin before launch.

@@ -1,4 +1,4 @@
-# Local-dev Postgres + Redis for Pathfinder. Production uses Supabase Postgres + Railway
+# Local-dev Postgres + Redis for SkyMatch. Production uses Supabase Postgres + Railway
 # Redis; this gives isolated, disposable local services matching the prod major versions.
 # Not used in prod.
 #
@@ -12,10 +12,14 @@
 services:
   db:
     image: postgres:16
-    container_name: pathfinder-db
+    container_name: skymatch-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      # Still `pathfinder` after the SkyMatch rename, deliberately: renaming the database
+      # would orphan the existing `pathfinder-pgdata` volume (a rename creates a fresh empty
+      # one), forcing a re-run of `alembic upgrade head` plus a full ingestion pass. It must
+      # also keep matching the healthcheck's -d flag and the DSNs in .env.example.
       POSTGRES_DB: pathfinder
     ports:
       - "5432:5432"
@@ -29,7 +33,7 @@ services:
 
   redis:
     image: redis:7
-    container_name: pathfinder-redis
+    container_name: skymatch-redis
     command: ["redis-server", "--save", "", "--appendonly", "no"]  # ephemeral; guard state is recreatable
     ports:
       - "6379:6379"

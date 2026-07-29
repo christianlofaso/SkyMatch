@@ -1,4 +1,4 @@
-"""Pathfinder load test (M9) — validates the 2-replica web service + the Redis-backed
+"""SkyMatch load test (M9) — validates the 2-replica web service + the Redis-backed
 guard (per-IP rate/concurrency limiter) + the org-wide Sonnet governor under concurrency.
 
 Run with locust (see loadtest/README.md). The scenarios are TAGGED so you choose how much
@@ -61,7 +61,7 @@ SAMPLE_JOB_TEXT = (
 _EXPECTED = {200, 429, 503}
 
 
-class PathfinderUser(HttpUser):
+class SkyMatchUser(HttpUser):
     # Modest think-time so a single host doesn't instantly saturate the per-IP limiter
     # outside the dedicated 'guard' burst scenario.
     wait_time = between(1, 3)

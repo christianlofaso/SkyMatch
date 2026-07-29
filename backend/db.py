@@ -42,7 +42,7 @@ pool = ConnectionPool(
     max_size=DB_POOL_MAX,
     open=False,
     kwargs={"row_factory": dict_row, "prepare_threshold": None},
-    name="pathfinder",
+    name="skymatch",
 )
 
 _opened = False

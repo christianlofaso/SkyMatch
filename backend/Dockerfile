@@ -1,4 +1,4 @@
-# Pathfinder backend image — shared by BOTH Railway services (web + worker); they run the
+# SkyMatch backend image — shared by BOTH Railway services (web + worker); they run the
 # same image with different start commands (web: uvicorn via railway.toml / Procfile `web`;
 # worker: `python -m worker.ingest` via railway.worker.toml / Procfile `worker`).
 #

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSaved } from "@/lib/useSaved";
 import { getRun, activeRunId, loadAnalyses } from "@/lib/storage";
-import type { UnifiedProfile } from "@/types/pathfinder";
+import type { UnifiedProfile } from "@/types/skymatch";
 import { bandOf } from "@/lib/bands";
 import { SiteFooter } from "@/components/SiteFooter";
 

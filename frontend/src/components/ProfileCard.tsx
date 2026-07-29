@@ -1,4 +1,4 @@
-import type { ProfileAnalysis } from "@/types/pathfinder";
+import type { ProfileAnalysis } from "@/types/skymatch";
 
 export function ProfileCard({ profile }: { profile: ProfileAnalysis }) {
   return (

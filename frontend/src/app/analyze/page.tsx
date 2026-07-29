@@ -8,7 +8,7 @@ import {
   AnalysisResponseSchema,
   type AnalysisResponse,
   type UnifiedProfile,
-} from "@/types/pathfinder";
+} from "@/types/skymatch";
 import AnalysisView from "@/components/AnalysisView";
 import { AppShell } from "@/components/AppShell";
 import { SignInGate } from "@/components/SignInGate";

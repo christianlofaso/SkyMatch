@@ -14,7 +14,7 @@ import type {
   MatchItem,
   GapItem,
   RoadmapResource,
-} from "@/types/pathfinder";
+} from "@/types/skymatch";
 import {
   saveRunPayloadOnly,
   saveAnalyses,

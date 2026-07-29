@@ -144,7 +144,7 @@ class RunResponse(BaseModel):
 # StreamingResponse status is locked at 200 once it starts) — the `message` is the
 # SAME friendly text the JSON /run would return, and `status` carries the HTTP code
 # it WOULD have used (advisory; the home page only surfaces the message).
-# Mirror: frontend/src/types/pathfinder.ts RunStreamEnvelopeSchema.
+# Mirror: frontend/src/types/skymatch.ts RunStreamEnvelopeSchema.
 
 class RunStreamError(BaseModel):
     message: str

@@ -13,7 +13,7 @@ import {
   type AnnotateEnvelope,
   type AnalyzeStreamEnvelope,
   type RunStreamEnvelope,
-} from "@/types/pathfinder";
+} from "@/types/skymatch";
 
 import { supabase } from "@/lib/supabase";
 import { getTurnstileToken } from "@/lib/turnstile-client";
@@ -110,7 +110,7 @@ export async function parseResume(file: File): Promise<{ profile_id: string; pro
   return { profile_id: raw.profile_id, profile: parsed.data };
 }
 
-export async function runPathfinder(input: {
+export async function runSkyMatch(input: {
   url?: string;
   text?: string;
   profile_id?: string;
@@ -313,9 +313,9 @@ export async function* analyzeJobStream(
  * (ndjson): profile(working→done) → internships(working) → done(full RunResponse), or
  * an "error" envelope carrying the friendly message. The home page shows a 2-step
  * progress indicator and navigates on "done". Same streaming shape as analyzeBatch.
- * The single-shot runPathfinder() stays for any non-streaming caller.
+ * The single-shot runSkyMatch() stays for any non-streaming caller.
  */
-export async function* runPathfinderStream(
+export async function* runSkyMatchStream(
   input: { url?: string; text?: string; profile_id?: string },
   signal?: AbortSignal,
 ): AsyncGenerator<RunStreamEnvelope, void, void> {
@@ -348,7 +348,7 @@ export async function* runPathfinderStream(
         const env = RunStreamEnvelopeSchema.parse(JSON.parse(line));
         yield env;
       } catch (e) {
-        console.warn("[runPathfinderStream] skipped malformed line", line, e);
+        console.warn("[runSkyMatchStream] skipped malformed line", line, e);
       }
     }
   }

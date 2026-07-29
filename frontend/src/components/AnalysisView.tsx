@@ -8,7 +8,7 @@ import type {
   Roadmap,
   RoadmapResource,
   ProjectSuggestion,
-} from "@/types/pathfinder";
+} from "@/types/skymatch";
 import { BAND_LABEL_ONE, type Band } from "@/lib/bands";
 
 // Continuous job-fit analysis, re-skinned to option-j analysis.html: six numbered sections

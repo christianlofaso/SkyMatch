@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { getRun, activeRunId } from "@/lib/storage";
-import type { UnifiedProfile } from "@/types/pathfinder";
+import type { UnifiedProfile } from "@/types/skymatch";
 
 // Six skill axes for the radar. Axis scores are an ILLUSTRATIVE derivation from the profile's
 // skills (keyword buckets) — not a backend metric. They give the chart shape; don't read them

@@ -1,5 +1,5 @@
 "use client";
-import type { Internship } from "@/types/pathfinder";
+import type { Internship } from "@/types/skymatch";
 import type { BucketKey } from "@/lib/storage";
 import type { CardAnalysisState } from "@/lib/cardState";
 import { type Band, TYPE_TAG } from "@/lib/bands";

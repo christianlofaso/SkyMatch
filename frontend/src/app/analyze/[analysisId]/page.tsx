@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import type { AnalysisResponse } from "@/types/pathfinder";
+import type { AnalysisResponse } from "@/types/skymatch";
 import AnalysisView from "@/components/AnalysisView";
 import { getAnalysis, activeRunId } from "@/lib/storage";
 import { DEMO_RUN_ID } from "@/lib/demoRun";

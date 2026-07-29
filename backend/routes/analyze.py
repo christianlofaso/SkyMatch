@@ -195,7 +195,7 @@ class AnalysisResponse(BaseModel):
 # legitimately use null, and exclude_none would DROP those null keys — but the Zod data
 # schemas require them present, so it'd fail validation. Off-phase fields arrive as null;
 # the Zod wrapper marks them nullable+optional.
-# Mirror: frontend/src/types/pathfinder.ts AnalyzeStreamEnvelopeSchema.
+# Mirror: frontend/src/types/skymatch.ts AnalyzeStreamEnvelopeSchema.
 
 class AnalyzeStreamError(BaseModel):
     message: str

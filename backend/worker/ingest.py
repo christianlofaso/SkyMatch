@@ -18,9 +18,9 @@ In PRODUCTION this runs as a Railway cron service every ~8h (cronSchedule "0 */8
 in railway.worker.toml) — a fresh container per tick that exits when the pass finishes.
 
 Windows Task Scheduler (local dev, every ~8h):
-    Program/script:  C:\\Users\\chris\\Desktop\\pathfinder\\backend\\venv\\Scripts\\python.exe
+    Program/script:  <repo>\\backend\\venv\\Scripts\\python.exe
     Arguments:       -m worker.ingest
-    Start in:        C:\\Users\\chris\\Desktop\\pathfinder\\backend
+    Start in:        <repo>\\backend
 POSIX cron equivalent:
     cd backend && ./venv/bin/python -m worker.ingest
 """

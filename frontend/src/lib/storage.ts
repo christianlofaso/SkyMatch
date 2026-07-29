@@ -1,5 +1,5 @@
 /**
- * Durable browser-side store for Pathfinder runs and analyses.
+ * Durable browser-side store for SkyMatch runs and analyses.
  *
  * Backed by localStorage (survives tab close / browser restart) so the home page
  * can show a "Previous runs" history. Replaces the old sessionStorage approach
@@ -25,7 +25,7 @@ import {
   QuickAnalysisResponseSchema,
   type RunResponse,
   type AnalysisResponse,
-} from "@/types/pathfinder";
+} from "@/types/skymatch";
 import type { CardAnalysisState, CardAnnotationState } from "@/lib/cardState";
 
 // ── Tunables ─────────────────────────────────────────────────────────────────

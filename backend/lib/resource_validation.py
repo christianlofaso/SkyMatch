@@ -62,7 +62,7 @@ def _is_generic_url(url: str) -> bool:
 _HEAD_HEADERS = {
     # Some CDNs 4xx unknown User-Agents on HEAD; identify as a normal browser.
     "User-Agent": (
-        "Mozilla/5.0 (compatible; PathfinderBot/1.0; "
+        "Mozilla/5.0 (compatible; SkyMatchBot/1.0; "
         "+https://github.com/anthropics/claude-code)"
     ),
     "Accept": "*/*",

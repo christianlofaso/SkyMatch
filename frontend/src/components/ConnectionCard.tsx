@@ -1,4 +1,4 @@
-import type { Connection } from "@/types/pathfinder";
+import type { Connection } from "@/types/skymatch";
 
 const COMMONALITY_COLORS: Record<string, string> = {
   fraternity: "var(--color-fraternity)",

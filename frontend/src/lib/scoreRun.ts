@@ -1,6 +1,6 @@
 "use client";
 import { analyzeBatch } from "@/lib/api";
-import type { UnifiedProfile, InternshipBuckets } from "@/types/pathfinder";
+import type { UnifiedProfile, InternshipBuckets } from "@/types/skymatch";
 import type { AnalysesByBucket, BucketKey } from "@/lib/storage";
 import type { CardAnalysisState } from "@/lib/cardState";
 

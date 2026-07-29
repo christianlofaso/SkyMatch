@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { type RunResponse } from "@/types/pathfinder";
+import { type RunResponse } from "@/types/skymatch";
 import { analyzeBatch, annotateFit, HttpError } from "@/lib/api";
 import { SignInGate } from "@/components/SignInGate";
 import { useAuth } from "@/lib/auth-context";

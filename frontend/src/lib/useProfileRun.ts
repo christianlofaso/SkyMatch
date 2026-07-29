@@ -2,8 +2,8 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { parseResume, runPathfinderStream } from "@/lib/api";
-import { type UnifiedProfile } from "@/types/pathfinder";
+import { parseResume, runSkyMatchStream } from "@/lib/api";
+import { type UnifiedProfile } from "@/types/skymatch";
 import { saveRun, saveAnalyses } from "@/lib/storage";
 import { scoreRunInternships } from "@/lib/scoreRun";
 import { useAuth } from "@/lib/auth-context";
@@ -119,7 +119,7 @@ export function useProfileRun() {
     const runId = Date.now().toString(36);
     try {
       let navigated = false;
-      for await (const env of runPathfinderStream(payload)) {
+      for await (const env of runSkyMatchStream(payload)) {
         if (env.phase === "profile") {
           setStep("profile");
         } else if (env.phase === "internships") {

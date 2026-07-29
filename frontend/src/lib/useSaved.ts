@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import type { Internship } from "@/types/pathfinder";
+import type { Internship } from "@/types/skymatch";
 import type { BucketKey } from "@/lib/storage";
 
 // Bookmarked roles, persisted to localStorage (pf:saved). We store the FULL listing (+ its
